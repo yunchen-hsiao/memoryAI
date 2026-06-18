@@ -17,7 +17,10 @@ supabase_key = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(supabase_url, supabase_key)
 
 # Configure Gemini
-client = genai.Client()
+gemini_api_key = os.environ.get("GEMINI_API_KEY")
+if not gemini_api_key:
+    print("WARNING: GEMINI_API_KEY environment variable is missing!")
+client = genai.Client(api_key=gemini_api_key)
 
 app = FastAPI(title="MemoryAI API")
 
