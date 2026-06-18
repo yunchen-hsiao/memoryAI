@@ -239,7 +239,7 @@ def chat(request: ChatRequest):
             formatted_history.append({"role": role, "parts": [{"text": msg["content"]}]})
             
         chat_session = client.chats.create(
-            model='gemini-2.5-flash',
+            model='gemini-2.5-pro',
             config=genai.types.GenerateContentConfig(
                 system_instruction=system_instruction
             ),
@@ -254,8 +254,8 @@ def chat(request: ChatRequest):
                 return {"reply": response.text}
             except Exception as e:
                 if "503" in str(e) and attempt < max_retries - 1:
-                    print(f"Chat API 503 Error. Retrying in 3 seconds... (Attempt {attempt + 1}/{max_retries})")
-                    time.sleep(3)
+                    print(f"Chat API 503 Error. Retrying in 5 seconds... (Attempt {attempt + 1}/{max_retries})")
+                    time.sleep(5)
                 else:
                     raise e
     except Exception as e:

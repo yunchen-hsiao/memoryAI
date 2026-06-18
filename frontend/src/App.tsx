@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import Dashboard from './components/Dashboard'
 import MemoryTimeline from './components/MemoryTimeline'
-import { MessageSquare, LayoutDashboard, History } from 'lucide-react'
+import { MessageSquare, LayoutDashboard, History, Trash2 } from 'lucide-react'
 
 interface SummarizedEvent {
   summary: string;
@@ -16,6 +16,8 @@ interface SummarizedEvent {
   diary_date: string;
   diary_time: string;
 }
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 function App() {
   const [activeTab, setActiveTab] = useState<'chat' | 'dashboard' | 'timeline'>('chat')
@@ -38,7 +40,7 @@ function App() {
   }, [messages, isLoading, activeTab])
 
   useEffect(() => {
-    fetch('http://localhost:8000/api/health')
+    fetch(`${API_BASE}/api/health`)
       .then(res => res.json())
       .then(data => setHealthStatus(data.message))
       .catch(() => setHealthStatus('Backend is offline'))
@@ -55,7 +57,7 @@ function App() {
     setIsLoading(true)
 
     try {
-      const res = await fetch('http://localhost:8000/api/chat', {
+      const res = await fetch(`${API_BASE}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -82,10 +84,10 @@ function App() {
     }
     setIsSummarizing(true);
     try {
-      const res = await fetch('http://localhost:8000/api/chat/summarize', {
+      const res = await fetch(`${API_BASE}/api/chat/summarize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: "", history: messages })
+        body: JSON.stringify({ message: "", history: messages.filter(m => m.role === 'user') })
       });
       const data = await res.json();
       if (data.success) {
@@ -105,7 +107,7 @@ function App() {
     
     try {
       for (const event of summarizedEvents) {
-        await fetch('http://localhost:8000/api/memories', {
+        await fetch(`${API_BASE}/api/memories`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -279,7 +281,20 @@ function App() {
               {summarizedEvents.map((event, idx) => (
                 <div key={idx} className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-5 space-y-4">
                   <div className="flex flex-col sm:flex-row justify-between sm:items-center border-b border-slate-700 pb-3 gap-2">
-                    <h4 className="text-lg font-semibold text-emerald-400">事件 {idx + 1}</h4>
+                    <div className="flex items-center gap-3">
+                      <h4 className="text-lg font-semibold text-emerald-400">事件 {idx + 1}</h4>
+                      <button 
+                        onClick={() => {
+                          if (window.confirm('確定要刪除這個事件嗎？')) {
+                            setSummarizedEvents(summarizedEvents.filter((_, i) => i !== idx));
+                          }
+                        }}
+                        className="p-1.5 bg-slate-700/50 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 rounded-lg transition-colors"
+                        title="刪除此事件"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                     <div className="flex gap-2 sm:gap-4">
                       <input type="date" value={event.diary_date} onChange={(e) => {
                         const newEvents = [...summarizedEvents];

@@ -12,6 +12,8 @@ interface Memory {
   original_text: string;
 }
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
 export default function MemoryTimeline() {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [loading, setLoading] = useState(true);
@@ -24,7 +26,7 @@ export default function MemoryTimeline() {
   const fetchMemories = async () => {
     try {
       setLoading(true);
-      const res = await fetch('http://localhost:8000/api/memories');
+      const res = await fetch(`${API_BASE}/api/memories`);
       const data = await res.json();
       if (data.memories) {
         setMemories(data.memories);
@@ -43,7 +45,7 @@ export default function MemoryTimeline() {
   const handleDelete = async (id: string) => {
     if (!window.confirm('確定要刪除這段記憶嗎？此動作無法復原。')) return;
     try {
-      const res = await fetch(`http://localhost:8000/api/memories/${id}`, { method: 'DELETE' });
+      const res = await fetch(`${API_BASE}/api/memories/${id}`, { method: 'DELETE' });
       if (res.ok) {
         setMemories(memories.filter(m => m.id !== id));
       }
@@ -56,7 +58,7 @@ export default function MemoryTimeline() {
     try {
       if (editingMemory.id) {
         // Update
-        const res = await fetch(`http://localhost:8000/api/memories/${editingMemory.id}`, {
+        const res = await fetch(`${API_BASE}/api/memories/${editingMemory.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(editingMemory)
@@ -67,7 +69,7 @@ export default function MemoryTimeline() {
         }
       } else {
         // Create
-        const res = await fetch('http://localhost:8000/api/memories', {
+        const res = await fetch(`${API_BASE}/api/memories`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(editingMemory)
@@ -102,6 +104,12 @@ export default function MemoryTimeline() {
       (m.summary || '').toLowerCase().includes(q) ||
       (m.keywords || []).some(k => k.toLowerCase().includes(q))
     );
+  }).sort((a, b) => {
+    const timeA = a.diary_time || '00:00:00';
+    const timeB = b.diary_time || '00:00:00';
+    const datetimeA = `${a.diary_date} ${timeA}`;
+    const datetimeB = `${b.diary_date} ${timeB}`;
+    return datetimeB.localeCompare(datetimeA);
   });
 
   return (

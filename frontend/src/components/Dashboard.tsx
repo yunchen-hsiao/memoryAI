@@ -3,6 +3,8 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { Brain, TrendingUp, PieChart as PieChartIcon, Calendar, Heart, User, Sparkles, Network } from 'lucide-react';
 import MemoryGraph from './MemoryGraph';
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
 export default function Dashboard() {
   const [stats, setStats] = useState<{
     emotion_trends: any[], 
@@ -21,7 +23,7 @@ export default function Dashboard() {
 
   const handleBuildEntities = async () => {
     try {
-      const res = await fetch('http://localhost:8000/api/entities/build', { method: 'POST' });
+      const res = await fetch(`${API_BASE}/api/entities/build`, { method: 'POST' });
       const data = await res.json();
       if (data.success) {
         alert('⚡ ' + data.message);
@@ -34,7 +36,7 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
-    fetch('http://localhost:8000/api/dashboard/stats')
+    fetch(`${API_BASE}/api/dashboard/stats`)
       .then(res => res.json())
       .then(data => {
         setStats(data);

@@ -22,6 +22,8 @@ interface GraphData {
   links: Link[];
 }
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
 export default function MemoryGraph() {
   const [data, setData] = useState<GraphData>({ nodes: [], links: [] });
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
@@ -29,7 +31,7 @@ export default function MemoryGraph() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetch('http://localhost:8000/api/dashboard/graph')
+    fetch(`${API_BASE}/api/dashboard/graph`)
       .then(res => res.json())
       .then(fetchedData => {
         if (fetchedData && fetchedData.nodes && fetchedData.links) {
