@@ -192,12 +192,14 @@ export default function MemoryTimeline() {
 
                 {/* Content */}
                 <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-2">
-                    <span className="flex items-center gap-1.5 text-slate-400 text-sm bg-slate-900/50 px-3 py-1 rounded-full">
-                      <Calendar className="w-3.5 h-3.5" />
-                      {memory.diary_date} {memory.diary_time && <span className="text-slate-500 font-medium">| {memory.diary_time}</span>}
-                    </span>
-                    <h3 className="text-xl font-bold text-slate-100">{memory.topic || '無主題'}</h3>
+                  <div className="flex flex-col gap-2 mb-3">
+                    <h3 className="text-lg sm:text-xl font-bold text-slate-100 leading-tight">{memory.topic || '無主題'}</h3>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="flex items-center gap-1.5 text-slate-400 text-xs sm:text-sm bg-slate-900/50 px-2.5 py-1 rounded-full w-fit">
+                        <Calendar className="w-3.5 h-3.5" />
+                        {memory.diary_date} {memory.diary_time && <span className="text-slate-500 font-medium">| {memory.diary_time}</span>}
+                      </span>
+                    </div>
                   </div>
                   
                   <p className="text-slate-300 leading-relaxed mb-4">{memory.summary}</p>

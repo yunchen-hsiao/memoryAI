@@ -134,11 +134,20 @@ function App() {
   return (
     <div className="flex flex-col h-screen bg-slate-900 text-slate-50 font-sans">
       <header className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-950 shadow-md">
-        <div className="flex items-center gap-8">
-          <h1 className="text-xl font-bold flex items-center gap-2">
-            <span className="bg-gradient-to-r from-emerald-400 to-teal-500 bg-clip-text text-transparent">MemoryAI</span>
-            <span className="text-sm font-normal text-slate-400 hidden sm:inline">心靈伴侶</span>
-          </h1>
+        <div className="flex items-center gap-4 lg:gap-8">
+          <div className="flex items-center gap-3">
+            {/* Mobile Hamburger Toggle */}
+            <button 
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className="lg:hidden p-2 -ml-2 text-slate-400 hover:text-slate-200"
+            >
+              {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+            </button>
+            <h1 className="text-xl font-bold flex items-center gap-2">
+              <span className="bg-gradient-to-r from-emerald-400 to-teal-500 bg-clip-text text-transparent">MemoryAI</span>
+              <span className="text-sm font-normal text-slate-400 hidden sm:inline">心靈伴侶</span>
+            </h1>
+          </div>
           
           <div className="flex items-center gap-2">
             {/* Desktop Navigation */}
@@ -178,13 +187,6 @@ function App() {
               </button>
             </div>
 
-            {/* Mobile Hamburger Toggle */}
-            <button 
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="lg:hidden p-2 text-slate-400 hover:text-slate-200"
-            >
-              {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-            </button>
           </div>
         </div>
 
