@@ -8,6 +8,7 @@
     "skipLibCheck": true,
 
     /* Bundler mode */
+    "ignoreDeprecations": "5.0",
     "baseUrl": ".",
     "paths": {
       "@/*": [
