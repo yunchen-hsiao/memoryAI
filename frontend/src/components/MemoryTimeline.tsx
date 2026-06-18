@@ -4,6 +4,7 @@ import { Search, Edit2, Trash2, Calendar, Hash, Smile, Frown, Activity, Plus } f
 interface Memory {
   id: string;
   diary_date: string;
+  diary_time?: string;
   topic: string;
   summary: string;
   emotion_score: number;
@@ -84,6 +85,7 @@ export default function MemoryTimeline() {
   const openNewMemoryModal = () => {
     setEditingMemory({
       diary_date: new Date().toISOString().split('T')[0],
+      diary_time: '',
       topic: '',
       summary: '',
       emotion_score: 50,
@@ -177,7 +179,7 @@ export default function MemoryTimeline() {
                   <div className="flex items-center gap-3 mb-2">
                     <span className="flex items-center gap-1.5 text-slate-400 text-sm bg-slate-900/50 px-3 py-1 rounded-full">
                       <Calendar className="w-3.5 h-3.5" />
-                      {memory.diary_date}
+                      {memory.diary_date} {memory.diary_time && <span className="text-slate-500 font-medium">| {memory.diary_time}</span>}
                     </span>
                     <h3 className="text-xl font-bold text-slate-100">{memory.topic || '無主題'}</h3>
                   </div>
@@ -212,9 +214,14 @@ export default function MemoryTimeline() {
                   <input type="date" value={editingMemory.diary_date || ''} onChange={e => setEditingMemory({...editingMemory, diary_date: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-1">情緒分數 (0-100)</label>
-                  <input type="number" min="0" max="100" value={editingMemory.emotion_score || 0} onChange={e => setEditingMemory({...editingMemory, emotion_score: parseInt(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-blue-500" />
+                  <label className="block text-sm font-medium text-slate-400 mb-1">時間 (選填)</label>
+                  <input type="time" value={editingMemory.diary_time || ''} onChange={e => setEditingMemory({...editingMemory, diary_time: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-blue-500" />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-400 mb-1">情緒分數 (0-100)</label>
+                <input type="number" min="0" max="100" value={editingMemory.emotion_score || 0} onChange={e => setEditingMemory({...editingMemory, emotion_score: parseInt(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-blue-500" />
               </div>
 
               <div>

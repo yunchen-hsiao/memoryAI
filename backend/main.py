@@ -312,6 +312,7 @@ from typing import Optional, List
 
 class MemoryUpdate(BaseModel):
     diary_date: Optional[str] = None
+    diary_time: Optional[str] = None
     topic: Optional[str] = None
     summary: Optional[str] = None
     emotion_score: Optional[int] = None
@@ -320,6 +321,7 @@ class MemoryUpdate(BaseModel):
 
 class MemoryCreate(BaseModel):
     diary_date: str
+    diary_time: Optional[str] = None
     topic: str
     summary: str
     emotion_score: int

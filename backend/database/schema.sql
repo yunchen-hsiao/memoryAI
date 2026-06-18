@@ -12,6 +12,7 @@ create table memories (
   importance_weight integer default 3, -- 1-5 scale
   embedding vector(3072), -- Gemini text-embedding-004 has 768 dimensions
   diary_date date, -- The actual date the event happened
+  diary_time time NULL, -- The actual time the event happened
   created_at timestamp with time zone default timezone('utc'::text, now())
 );
 

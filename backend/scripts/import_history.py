@@ -46,7 +46,8 @@ def analyze_diary(content: str, date_str: str) -> tuple[list, int]:
             "keywords": ["關鍵字1", "關鍵字2", "陳政煒", "餅乾", "具體人事物"], // 🚨 請絕對排除「聊天、訊息、回覆、朋友、我」等無意義的通稱，只留下「專有名詞、具體人名、地名、獨特物件」！
             "emotion_score": 0到100的整數 (0是最負面悲傷，100是最快樂正面，50是平靜),
             "importance_weight": 1到5的整數 (1是最不重要，5是對人生影響重大),
-            "content_chunk": "與這個事件相關的日記原文段落（請保留原汁原味的金句或所有微小細節，不要刪減）"
+            "content_chunk": "與這個事件相關的日記原文段落（請保留原汁原味的金句或所有微小細節，不要刪減）",
+            "diary_time": "如果日記中有提到具體時間（如：傍晚六點半、早上），請推斷轉換為 24 小時制的 HH:MM 字串（例如：18:30, 08:00）；如果完全沒提到時間，請填 null"
         }}
     ]
 
@@ -159,14 +160,15 @@ def parse_and_upload(file_path: str):
                 
                 # 準備寫入資料庫的格式
                 row = {
-                    "content": event.get('content_chunk', entry['text']),
-                    "summary": event['summary'],
-                    "topic": event['topic'],
-                    "keywords": event['keywords'],
-                    "emotion_score": event['emotion_score'],
-                    "importance_weight": event['importance_weight'],
+                    "content": event.get("content_chunk", ""),
+                    "summary": event.get("summary", ""),
+                    "topic": event.get("topic", "未分類"),
+                    "keywords": event.get("keywords", []),
+                    "emotion_score": event.get("emotion_score", 50),
+                    "importance_weight": event.get("importance_weight", 3),
+                    "embedding": embedding,
                     "diary_date": entry['date'],
-                    "embedding": embedding
+                    "diary_time": event.get("diary_time")
                 }
                 
                 try:
