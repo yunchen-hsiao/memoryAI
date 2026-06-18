@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, Brush } from 'recharts';
-import { Brain, TrendingUp, PieChart as PieChartIcon, Calendar, Heart, User, Sparkles, Network } from 'lucide-react';
+import { Brain, TrendingUp, PieChart as PieChartIcon, Calendar, Heart, Sparkles, Network } from 'lucide-react';
 import MemoryGraph from './MemoryGraph';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -235,7 +235,7 @@ export default function Dashboard() {
                   contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px' }}
                   itemStyle={{ color: '#34d399' }}
                   labelStyle={{ color: '#f8fafc', fontWeight: 'bold', marginBottom: '4px' }}
-                  formatter={(value: any, name: any, props: any) => [
+                  formatter={(value: any, _name: any, props: any) => [
                     `${value} 分 (主要話題: ${props.payload.main_topic})`, '情緒分數'
                   ]}
                 />
@@ -260,7 +260,7 @@ export default function Dashboard() {
                 <YAxis dataKey="name" type="category" stroke="#94a3b8" fontSize={12} width={80} />
                 <Tooltip cursor={{ fill: '#1e293b' }} contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px' }} itemStyle={{ color: '#34d399' }} formatter={(value: any) => [`${value} 次`, '出現次數']} />
                 <Bar dataKey="value" radius={[0, 4, 4, 0]}>
-                  {stats.keyword_distribution.map((entry, index) => (
+                  {stats.keyword_distribution.map((_entry, index) => (
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                   ))}
                 </Bar>

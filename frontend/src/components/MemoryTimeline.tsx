@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Search, Edit2, Trash2, Calendar, Hash, Smile, Frown, Activity, Plus } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Search, Edit2, Trash2, Calendar, Hash, Activity, Plus } from 'lucide-react';
 
 interface Memory {
   id: string;
