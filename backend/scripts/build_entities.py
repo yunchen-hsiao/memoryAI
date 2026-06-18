@@ -118,8 +118,11 @@ def build_entities():
                 if "503" in error_msg and attempt < max_retries - 1:
                     print(f"   ⏳ 遇到 503 錯誤，等待 5 秒後進行第 {attempt + 2} 次重試...")
                     time.sleep(5)
+                elif attempt == max_retries - 1:
+                    print(f"   ⚠️ 編譯 {entity_name} 失敗次數過多，跳過此實體: {e}")
+                    break
                 else:
-                    print(f"   ❌ 編譯 {entity_name} 失敗: {e}")
+                    print(f"   ❌ 編譯 {entity_name} 發生未知錯誤，跳過: {e}")
                     break
 
     print("\n🎉 所有核心實體編譯完成！聊天引擎現在變得更聰明了！")

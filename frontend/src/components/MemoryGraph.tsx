@@ -66,21 +66,21 @@ export default function MemoryGraph() {
     
     let rgb = '';
     if (isEntity) {
-      rgb = '248, 250, 252'; // White for entities
+      rgb = '245, 158, 11'; // amber-500 for entities
     } else {
       const score = node.score || 50;
-      if (score >= 80) rgb = '96, 165, 250'; // blue-400 (Very Happy)
-      else if (score >= 60) rgb = '147, 197, 253'; // blue-300 (Happy)
-      else if (score >= 40) rgb = '148, 163, 184'; // slate-400 (Neutral)
-      else if (score >= 20) rgb = '244, 63, 94'; // rose-500 (Sad)
-      else rgb = '190, 18, 60'; // rose-700 (Very Sad/Angry)
+      if (score >= 80) rgb = '45, 212, 191'; // teal-400 (Very Happy)
+      else if (score >= 60) rgb = '153, 246, 228'; // teal-200 (Happy)
+      else if (score >= 40) rgb = '214, 211, 209'; // stone-300 (Neutral)
+      else if (score >= 20) rgb = '251, 113, 133'; // rose-400 (Sad)
+      else rgb = '225, 29, 72'; // rose-600 (Very Sad/Angry)
     }
 
     ctx.beginPath();
     if (isEntity) {
       // Use shadowBlur to create a true glowing optical halo around a solid core
-      ctx.shadowColor = `rgba(${rgb}, 0.8)`;
-      ctx.shadowBlur = 25; // Glow intensity/spread
+      ctx.shadowColor = `rgba(${rgb}, 0.6)`;
+      ctx.shadowBlur = 15; // Glow intensity/spread
       ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI, false);
       ctx.fillStyle = `rgb(${rgb})`;
       ctx.fill();
@@ -95,10 +95,10 @@ export default function MemoryGraph() {
     // Draw text label only for entities
     if (isEntity) {
       const fontSize = 14 / globalScale; 
-      ctx.font = `${fontSize}px Sans-Serif`;
+      ctx.font = `bold ${fontSize}px Sans-Serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+      ctx.fillStyle = 'rgba(28, 25, 23, 0.8)'; // stone-900
       ctx.fillText(node.name, node.x, node.y + radius + 15 + (10 / globalScale));
     }
   }, []);
@@ -129,7 +129,7 @@ export default function MemoryGraph() {
     ctx.beginPath();
     ctx.moveTo(startX, startY);
     ctx.lineTo(endX, endY);
-    ctx.strokeStyle = 'rgba(148, 163, 184, 0.12)';
+    ctx.strokeStyle = 'rgba(168, 162, 158, 0.3)'; // stone-400
     ctx.lineWidth = 1.5;
     ctx.stroke();
   }, []);
@@ -149,9 +149,9 @@ export default function MemoryGraph() {
   }, [data]);
 
   return (
-    <div ref={containerRef} className="w-full h-full bg-slate-900/40 rounded-2xl border border-slate-700/50 shadow-inner overflow-hidden relative">
+    <div ref={containerRef} className="w-full h-full bg-stone-50/50 rounded-[2rem] overflow-hidden relative">
       {!data.nodes || data.nodes.length === 0 ? (
-        <div className="absolute inset-0 flex items-center justify-center text-slate-500">
+        <div className="absolute inset-0 flex items-center justify-center text-stone-400">
           <p>等待星系資料... (若持續未顯示，請確認後端是否已重新啟動)</p>
         </div>
       ) : (
@@ -179,33 +179,33 @@ export default function MemoryGraph() {
       )}
       
       {/* Legend */}
-      <div className="absolute bottom-4 left-4 bg-slate-900/80 backdrop-blur-md p-3 rounded-xl border border-slate-700/50 flex flex-col gap-2 text-xs">
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-slate-50 shadow-[0_0_12px_rgba(248,250,252,1)]"></div>
-          <span className="text-slate-300">核心人物 / 事物</span>
+      <div className="absolute bottom-6 left-6 bg-white/90 backdrop-blur-md p-4 rounded-2xl border border-stone-200 shadow-sm flex flex-col gap-3 text-sm">
+        <div className="flex items-center gap-3">
+          <div className="w-3.5 h-3.5 rounded-full bg-amber-500 shadow-[0_0_12px_rgba(245,158,11,0.6)]"></div>
+          <span className="text-stone-600 font-medium">核心人物 / 事物</span>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-blue-400 opacity-80"></div>
-          <span className="text-slate-400">正向記憶</span>
+        <div className="flex items-center gap-3">
+          <div className="w-3.5 h-3.5 rounded-full bg-teal-400 opacity-90"></div>
+          <span className="text-stone-500">正向記憶</span>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-rose-500 opacity-80"></div>
-          <span className="text-slate-400">負向記憶</span>
+        <div className="flex items-center gap-3">
+          <div className="w-3.5 h-3.5 rounded-full bg-rose-500 opacity-90"></div>
+          <span className="text-stone-500">負向記憶</span>
         </div>
       </div>
 
       {/* Selected Memory Detail Card */}
       {selectedMemory && (
-        <div className="absolute top-4 right-4 w-80 bg-slate-800/95 backdrop-blur-md p-5 rounded-xl border border-slate-600/50 shadow-2xl z-10 animate-in fade-in slide-in-from-top-4 duration-300">
+        <div className="absolute top-6 right-6 w-80 bg-white/95 backdrop-blur-md p-6 rounded-3xl border border-stone-200 shadow-xl z-10 animate-in fade-in slide-in-from-top-4 duration-300">
           <button 
             onClick={() => setSelectedMemory(null)}
-            className="absolute top-3 right-3 text-slate-400 hover:text-white transition-colors"
+            className="absolute top-4 right-4 p-1.5 rounded-full text-stone-400 hover:bg-stone-100 hover:text-stone-800 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
-          <h4 className="text-emerald-400 font-semibold mb-1 text-sm">{selectedMemory.name.split(' ')[0]}</h4>
-          <h3 className="text-slate-100 font-bold mb-3 text-lg leading-tight">{selectedMemory.name.substring(11)}</h3>
-          <p className="text-slate-300 text-sm leading-relaxed max-h-60 overflow-y-auto pr-2">
+          <h4 className="text-amber-600 font-bold mb-1.5 text-xs uppercase tracking-widest">{selectedMemory.name.split(' ')[0]}</h4>
+          <h3 className="text-stone-800 font-black mb-4 text-xl leading-tight">{selectedMemory.name.substring(11)}</h3>
+          <p className="text-stone-600 text-sm leading-relaxed max-h-60 overflow-y-auto pr-2 custom-scrollbar font-medium">
             {selectedMemory.summary || "目前沒有這段記憶的詳細摘要。"}
           </p>
         </div>

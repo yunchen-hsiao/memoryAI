@@ -1,101 +1,73 @@
-# MemoryAI (心靈伴侶 / 專屬大腦)
+# MemoryAI - 你的專屬心靈大腦 🧠
 
-這是一個結合了 **RAG (檢索增強生成)** 與 **情感分析** 的全端 AI 專屬助理應用。
-有別於市面上聊完就忘的 AI 聊天機器人，MemoryAI 能夠將你的對話、日記與情感波動「固化」為長期記憶，並透過向量資料庫隨時回想。它不僅是你的傾聽者，更是最了解你的人際關係與歷史軌跡的「高階專屬幕僚」。
+MemoryAI 是一個結合 RAG（檢索增強生成）、情感分析與核心人物網路的智慧型日記系統。它不僅僅是一個對話機器人，更是一個能記住你喜怒哀樂、梳理人際關係、並且隨著你的傾訴而成長的「數位大腦」與「靈魂伴侶」。
 
----
+## ✨ 核心功能
 
-## 核心功能介紹
+### 1. 溫馨治癒的對話空間 (Memory Chat)
+- **自然傾訴**：就像和一個懂你的朋友聊天一樣，自由地分享你的一天。
+- **智慧歸檔**：AI 會自動分析對話內容，將一段長篇對話智慧切分為多個獨立的「記憶事件」。
+- **情感感知**：自動為每一段記憶打上情感分數 (0-100)，並提取核心關鍵字。
 
-### 1. 亦師亦友的 AI 幕僚 
+### 2. 歷史記憶流 (Memory Timeline)
+- **手動記錄與編輯**：隨時手動寫下回憶，或修改過去的記憶。
+- **視覺化情緒**：透過不同的色彩標籤，一眼看出每一段記憶的情緒色彩。
+- **快速檢索**：支援透過關鍵字、主題快速找回塵封的記憶。
 
-搭載 Google Gemini 2.5 Flash 模型，AI 會在每次對話前，自動去大腦（資料庫）裡檢索與你對話相關的歷史記憶與人物設定。它記得你的朋友、你的煩惱，並且會用幽默、自然的人情味與你對話。
+### 3. 大腦記憶儀表板 (Brain Dashboard)
+- **情緒時光機**：追蹤你近期的情緒起伏曲線。
+- **記憶雷達**：分析你生活中最常出現的關鍵字。
+- **核心實體深度分析 (角色看板)**：
+  - AI 會自動彙整出你生命中重要的人物或事物。
+  - 計算他們對你帶來的情感影響力（正向或負向）。
+  - 顯示共現網路與最近的互動回放。
 
-### 2. 記憶歸檔系統
-
-RAG 系統的最強殺手鐧。當你跟 AI 聊完天、抱怨完之後，只需點擊「歸檔對話」，AI 就會自動將落落長的對話切分為多個「獨立事件」，自動提取摘要、下標籤、給予情緒分數，並在你確認後永久存入向量資料庫。
-
-### 3. 情感紀錄儀表板
-
-透過精美的視覺化圖表，讓你一眼看穿自己的內心狀態：
-
-- **情緒波動折線圖**：追蹤你近期的情緒起伏。
-- **主題頻率長條圖**：分析你最常思考或煩惱的事情。
-
-### 4. 核心人物網
-
-系統會自動在背景分析你的日記與對話，抓取出常出現的「人物」，建立專屬的角色看板。系統懂得過濾掉無關的地名或專案，只把真正重要的人際關係實體化，讓 AI 更懂你的人際網絡。
-
-### 5. 記憶時光機
-
-完整的 CRUD 介面，讓你隨時搜尋、回顧、手動新增或編輯過去的記憶碎片。所有的記憶都會被轉化為高維度向量，成為 AI 思考的養分。
+### 4. 記憶星系網路圖 (Memory Graph)
+- 將所有的記憶與核心人物視覺化為動態的星系網路。
+- 點擊記憶行星，即可快速預覽該記憶的詳細內容與摘要。
 
 ---
 
-## 技術架構
+## 🛠 技術架構
 
-這個專案採用了現代化的前後端分離架構，結合了 Serverless 資料庫與最強大的開源套件：
+MemoryAI 採用了前後端分離的現代化架構，結合了向量資料庫與大型語言模型，打造出具備長效記憶能力的系統。
 
 ### 前端 (Frontend)
-
-- **核心框架**: React 18 + Vite (TypeScript)
-- **UI & 樣式**: Tailwind CSS
-- **圖表視覺化**: Recharts (響應式動態圖表)
-- **Markdown 渲染**: React-Markdown + Remark-GFM
-- **圖示庫**: Lucide React
+- **框架**: React (Vite)
+- **樣式**: Tailwind CSS (溫暖治癒的石色/琥珀色系)
+- **圖表與視覺化**: 
+  - `recharts` (情緒曲線、關鍵字分佈)
+  - `react-force-graph-2d` (記憶星系網路圖)
+- **圖標庫**: `lucide-react`
 
 ### 後端 (Backend)
-
-- **核心框架**: FastAPI (Python) - 提供極速的非同步 API 介面。
-- **AI 模型**: Google GenAI SDK (`gemini-2.5-flash`) - 負責聊天、情緒分析、事件萃取、實體建模。
-- **向量生成**: `sentence-transformers` (`paraphrase-multilingual-MiniLM-L12-v2`) - 負責將繁體中文記憶轉化為 768 維的 Embedding 向量。
-
-### 資料庫 (Database)
-
-- **Supabase (PostgreSQL)**
-  - 利用 `pgvector` 擴充套件，進行餘弦相似度 (Cosine Similarity) 語意搜尋。
-  - 儲存關聯式資料（事件、日期、情緒分數）與非結構化文字。
+- **框架**: FastAPI (Python)
+- **大語言模型 (LLM)**: Google Gemini API
+  - 負責對話生成、記憶事件切分、摘要萃取與情緒分析。
+  - 使用 Function Calling 確保輸出的結構化資料（如 JSON）。
+- **向量資料庫**: Supabase (PostgreSQL + pgvector)
+  - 儲存所有的記憶事件，並將內容透過嵌入模型轉化為 Vector 儲存。
+  - 支援 RAG（Retrieval-Augmented Generation），在對話時透過向量相似度搜尋找回相關歷史記憶。
 
 ---
 
-## 如何運行
+## 🚀 部署指南
 
-### 1. 環境變數設定
+### 前端 (Vercel)
+1. 前端為標準的 Vite React 專案，已內建 `vercel.json`。
+2. 直接將程式碼推送到 GitHub，登入 Vercel 點擊 "Import Project" 匯入即可。
+3. **注意**: 部署前需將 `frontend/src` 中各檔案（如 `App.tsx`, `Dashboard.tsx`, `MemoryTimeline.tsx` 等）內寫死的 `http://localhost:8000` 替換為**您實際部署後的後端網址**，或使用環境變數（如 `import.meta.env.VITE_API_URL`）。
 
-請在 `backend` 資料夾下建立 `.env` 檔案，填入以下金鑰：
-
-```env
-GEMINI_API_KEY=your_gemini_api_key
-SUPABASE_URL=your_supabase_url
-SUPABASE_KEY=your_supabase_anon_key
-```
-
-### 2. 啟動後端 (Backend)
-
-```bash
-cd backend
-# 啟動虛擬環境
-.\venv\Scripts\activate
-# 安裝依賴 (初次運行)
-pip install -r requirements.txt
-# 啟動 FastAPI 伺服器
-uvicorn main:app --reload --port 8000
-```
-
-### 3. 啟動前端 (Frontend)
-
-```bash
-cd frontend
-# 安裝依賴 (初次運行)
-npm install
-# 啟動 Vite 開發伺服器
-npm run dev
-```
+### 後端 (Render / Railway)
+後端包含完整的 `Dockerfile` 與 `requirements.txt`，可無縫部署：
+1. 將專案推送到 GitHub。
+2. 在 Render 或 Railway 建立新的 Web Service 並選擇該 Repo，系統會自動辨識 Dockerfile 進行構建。
+3. **必要環境變數 (Environment Variables) 設定**：
+   - `GEMINI_API_KEY`: 您的 Google Gemini API 金鑰。
+   - `SUPABASE_URL`: 您的 Supabase 專案網址。
+   - `SUPABASE_KEY`: 您的 Supabase 專案匿名金鑰或 Service Role 金鑰。
+4. 啟動後，後端將於 8000 port 提供服務。
 
 ---
 
-## 系統架構亮點
-
-1. **Human-in-the-Loop (人機協作)**：記憶歸檔時，AI 只做草稿，最終由人類確認修改後再寫入資料庫，確保資料污染率降到最低。
-2. **自動錯誤重試 (Retry Mechanism)**：針對免費版 Gemini API 常見的 503 過載錯誤，後端已實作自動退避與重試機制，確保系統高可用性。
-3. **RWD 響應式設計**：完美支援手機與電腦瀏覽，無論是通勤時快速歸檔對話，或是坐在電腦前查看深度儀表板，都能獲得最佳體驗。
+> 「讓所有的回憶，都有一個溫暖的歸宿。」 - MemoryAI
