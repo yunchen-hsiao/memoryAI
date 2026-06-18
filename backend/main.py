@@ -166,7 +166,7 @@ def get_dashboard_stats():
 def get_embedding(text: str) -> list[float]:
     """呼叫 Gemini 產生文字的向量 (Embedding)"""
     response = client.models.embed_content(
-        model="gemini-embedding-2",
+        model="gemini-embedding-001",
         contents=text,
         config=types.EmbedContentConfig(
             task_type="RETRIEVAL_QUERY" # 搜尋用的 Task Type
@@ -242,7 +242,7 @@ def chat(request: ChatRequest):
             formatted_history.append({"role": role, "parts": [{"text": msg["content"]}]})
             
         chat_session = client.chats.create(
-            model='gemini-2.5-pro',
+            model='gemini-2.5-flash',
             config=genai.types.GenerateContentConfig(
                 system_instruction=system_instruction
             ),
