@@ -235,9 +235,10 @@ def chat(request: ChatRequest):
         {memory_context}
         """
         
-        # Format history
+        # Format history (只保留最近的 15 筆對話，避免對話過長耗盡 Token)
         formatted_history = []
-        for msg in request.history:
+        recent_history = request.history[-15:] if len(request.history) > 15 else request.history
+        for msg in recent_history:
             role = "user" if msg["role"] == "user" else "model"
             formatted_history.append({"role": role, "parts": [{"text": msg["content"]}]})
             

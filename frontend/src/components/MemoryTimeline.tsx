@@ -29,7 +29,15 @@ export default function MemoryTimeline() {
       const res = await fetch(`${API_BASE}/api/memories`);
       const data = await res.json();
       if (data.memories) {
-        setMemories(data.memories);
+        const sorted = data.memories.sort((a: Memory, b: Memory) => {
+          const dateA = a.diary_date || '';
+          const dateB = b.diary_date || '';
+          if (dateA !== dateB) return dateB.localeCompare(dateA);
+          const timeA = a.diary_time || '';
+          const timeB = b.diary_time || '';
+          return timeB.localeCompare(timeA);
+        });
+        setMemories(sorted);
       }
     } catch (err) {
       console.error(err);

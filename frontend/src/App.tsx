@@ -143,7 +143,7 @@ function App() {
           <div className="flex items-center gap-2">
             {/* Desktop Navigation */}
             <div className="hidden lg:flex bg-slate-800/50 p-1 rounded-lg border border-slate-700/50 backdrop-blur-sm">
-              <button
+              {/* <button
                 onClick={() => setActiveTab('chat')}
                 className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
                   activeTab === 'chat' 
@@ -153,7 +153,7 @@ function App() {
               >
                 <MessageSquare className="w-4 h-4" />
                 記憶對話
-              </button>
+              </button> */}
               <button
                 onClick={() => setActiveTab('dashboard')}
                 className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${

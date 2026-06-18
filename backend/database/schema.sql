@@ -27,7 +27,7 @@ create table entities (
 
 -- Create a function to search memories based on vector similarity and time decay
 create or replace function search_memories(
-  query_embedding vector(768),
+  query_embedding vector(3072),
   match_threshold float,
   match_count int,
   time_weight_factor float default 0.3 -- How much time decay affects the score (0 to 1)
