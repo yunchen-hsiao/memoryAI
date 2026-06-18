@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import Dashboard from './components/Dashboard'
 import MemoryTimeline from './components/MemoryTimeline'
-import { MessageSquare, LayoutDashboard, History, Trash2 } from 'lucide-react'
+import { MessageSquare, LayoutDashboard, History, Trash2, Menu, X } from 'lucide-react'
 
 interface SummarizedEvent {
   summary: string;
@@ -26,6 +26,7 @@ function App() {
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isSummarizing, setIsSummarizing] = useState(false)
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [summarizedEvents, setSummarizedEvents] = useState<SummarizedEvent[] | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -139,39 +140,50 @@ function App() {
             <span className="text-sm font-normal text-slate-400 hidden sm:inline">心靈伴侶</span>
           </h1>
           
-          <div className="flex bg-slate-800/50 p-1 rounded-lg border border-slate-700/50 backdrop-blur-sm">
-            <button
-              onClick={() => setActiveTab('chat')}
-              className={`lg:hidden flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
-                activeTab === 'chat' 
-                  ? 'bg-slate-700 text-emerald-400 shadow-sm' 
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
-              }`}
+          <div className="flex items-center gap-2">
+            {/* Desktop Navigation */}
+            <div className="hidden lg:flex bg-slate-800/50 p-1 rounded-lg border border-slate-700/50 backdrop-blur-sm">
+              <button
+                onClick={() => setActiveTab('chat')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeTab === 'chat' 
+                    ? 'bg-slate-700 text-emerald-400 shadow-sm' 
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+                }`}
+              >
+                <MessageSquare className="w-4 h-4" />
+                記憶對話
+              </button>
+              <button
+                onClick={() => setActiveTab('dashboard')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeTab === 'dashboard' 
+                    ? 'bg-slate-700 text-emerald-400 shadow-sm' 
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+                }`}
+              >
+                <LayoutDashboard className="w-4 h-4" />
+                大腦儀表板
+              </button>
+              <button
+                onClick={() => setActiveTab('timeline')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeTab === 'timeline' 
+                    ? 'bg-slate-700 text-emerald-400 shadow-sm' 
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+                }`}
+              >
+                <History className="w-4 h-4" />
+                記憶時光機
+              </button>
+            </div>
+
+            {/* Mobile Hamburger Toggle */}
+            <button 
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className="lg:hidden p-2 text-slate-400 hover:text-slate-200"
             >
-              <MessageSquare className="w-4 h-4" />
-              記憶對話
-            </button>
-            <button
-              onClick={() => setActiveTab('dashboard')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all
-                ${activeTab === 'dashboard' ? 'bg-slate-700 text-emerald-400 shadow-sm' : ''}
-                ${activeTab !== 'dashboard' ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50' : ''}
-                ${activeTab === 'chat' ? 'lg:bg-slate-700 lg:text-emerald-400 lg:shadow-sm lg:hover:bg-slate-700' : ''}
-              `}
-            >
-              <LayoutDashboard className="w-4 h-4" />
-              大腦儀表板
-            </button>
-            <button
-              onClick={() => setActiveTab('timeline')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
-                activeTab === 'timeline' 
-                  ? 'bg-slate-700 text-emerald-400 shadow-sm' 
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
-              }`}
-            >
-              <History className="w-4 h-4" />
-              記憶時光機
+              {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
             </button>
           </div>
         </div>
@@ -193,6 +205,39 @@ function App() {
           </span>
         </div>
       </header>
+
+      {/* Mobile Menu Dropdown */}
+      {isMobileMenuOpen && (
+        <div className="lg:hidden absolute top-[73px] left-0 right-0 bg-slate-950/95 backdrop-blur-xl border-b border-slate-800 z-50 p-4 flex flex-col gap-2 shadow-2xl">
+          <button
+            onClick={() => { setActiveTab('chat'); setIsMobileMenuOpen(false); }}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium transition-all ${
+              activeTab === 'chat' ? 'bg-slate-800 text-emerald-400' : 'text-slate-300'
+            }`}
+          >
+            <MessageSquare className="w-5 h-5" />
+            記憶對話
+          </button>
+          <button
+            onClick={() => { setActiveTab('dashboard'); setIsMobileMenuOpen(false); }}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium transition-all ${
+              activeTab === 'dashboard' ? 'bg-slate-800 text-emerald-400' : 'text-slate-300'
+            }`}
+          >
+            <LayoutDashboard className="w-5 h-5" />
+            大腦儀表板
+          </button>
+          <button
+            onClick={() => { setActiveTab('timeline'); setIsMobileMenuOpen(false); }}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium transition-all ${
+              activeTab === 'timeline' ? 'bg-slate-800 text-emerald-400' : 'text-slate-300'
+            }`}
+          >
+            <History className="w-5 h-5" />
+            記憶時光機
+          </button>
+        </div>
+      )}
 
       <div className="flex-1 flex overflow-hidden flex-col lg:flex-row">
         <div className={`flex-col border-r border-slate-800 ${['dashboard', 'timeline'].includes(activeTab) ? 'flex' : 'hidden lg:flex'} lg:w-[60%] h-full overflow-hidden bg-slate-900/50`}>

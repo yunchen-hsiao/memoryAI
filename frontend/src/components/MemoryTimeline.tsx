@@ -115,25 +115,25 @@ export default function MemoryTimeline() {
   return (
     <div className="flex flex-col h-full bg-slate-900/50 p-6 rounded-3xl border border-slate-700/50 backdrop-blur-md">
       {/* Header & Controls */}
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 sm:gap-0 mb-8">
         <h2 className="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400 flex items-center gap-3">
           <Activity className="w-6 h-6 text-blue-400" />
           歷史記憶流
         </h2>
-        <div className="flex items-center gap-4">
-          <div className="relative">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 w-full sm:w-auto">
+          <div className="relative w-full sm:w-auto">
             <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input 
               type="text" 
               placeholder="搜尋記憶、關鍵字..." 
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              className="w-64 bg-slate-800/80 border border-slate-600/50 rounded-full py-2 pl-10 pr-4 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/50 placeholder:text-slate-500"
+              className="w-full sm:w-64 bg-slate-800/80 border border-slate-600/50 rounded-full py-2 pl-10 pr-4 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/50 placeholder:text-slate-500"
             />
           </div>
           <button 
             onClick={openNewMemoryModal}
-            className="flex items-center gap-2 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 text-white px-4 py-2 rounded-full font-medium transition-all shadow-lg shadow-blue-500/20"
+            className="flex items-center justify-center gap-2 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 text-white px-4 py-2 rounded-full font-medium transition-all shadow-lg shadow-blue-500/20 w-full sm:w-auto shrink-0"
           >
             <Plus className="w-4 h-4" />
             新增記憶
@@ -169,10 +169,10 @@ export default function MemoryTimeline() {
                 </button>
               </div>
 
-              <div className="flex gap-6">
+              <div className="flex gap-4 sm:gap-6">
                 {/* Score Indicator */}
-                <div className="flex flex-col items-center justify-center min-w-[80px]">
-                  <div className={`w-16 h-16 rounded-full flex items-center justify-center text-xl font-bold shadow-lg
+                <div className="flex flex-col items-center justify-start sm:justify-center shrink-0 w-12 sm:w-auto sm:min-w-[80px]">
+                  <div className={`w-12 h-12 sm:w-16 sm:h-16 rounded-full flex items-center justify-center text-lg sm:text-xl font-bold shadow-lg
                     ${memory.emotion_score >= 80 ? 'bg-teal-500/20 text-teal-400 border border-teal-500/50 shadow-teal-500/10' : 
                       memory.emotion_score >= 60 ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 shadow-emerald-500/10' : 
                       memory.emotion_score >= 40 ? 'bg-slate-500/20 text-slate-400 border border-slate-500/50' : 
