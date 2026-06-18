@@ -37,6 +37,7 @@ returns table (
   summary text,
   topic text,
   diary_date date,
+  diary_time time,
   similarity float,
   final_score float
 )
@@ -49,6 +50,7 @@ begin
     memories.summary,
     memories.topic,
     memories.diary_date,
+    memories.diary_time,
     (1 - (memories.embedding <=> query_embedding)) as similarity,
     -- Hybrid score calculation:
     -- Base similarity + time decay factor

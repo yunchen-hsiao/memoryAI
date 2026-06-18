@@ -208,7 +208,7 @@ export default function MemoryTimeline() {
             <h3 className="text-xl font-bold text-slate-100 mb-6">{editingMemory.id ? '編輯記憶' : '手動新增記憶'}</h3>
             
             <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-slate-400 mb-1">日期</label>
                   <input type="date" value={editingMemory.diary_date || ''} onChange={e => setEditingMemory({...editingMemory, diary_date: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-blue-500" />

@@ -1,3 +1,4 @@
+import json
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -100,13 +101,18 @@ def get_dashboard_stats():
         }
 
         # 深度分析前五大核心實體
-        top_5_keywords = [item["name"] for item in keyword_distribution[:5]]
+        # 只過濾出已經被 AI 認定為「人類/實體」並編譯進 entities 資料表的關鍵字
+        entities_res = supabase.table("entities").select("name").execute()
+        valid_entity_names = {e["name"] for e in entities_res.data} if entities_res.data else set()
+        
+        top_keywords = [item["name"] for item in keyword_distribution if item["name"] in valid_entity_names][:5]
+        
         entity_analysis = []
         
         # 將 memories 照日期排序，確保 latest_events 是最新的
         sorted_memories = sorted(memories, key=lambda x: x['diary_date'], reverse=True)
         
-        for kw in top_5_keywords:
+        for kw in top_keywords:
             # 找出包含此關鍵字的記憶（放寬標準：不只看 keywords，連同 summary 也找，解決 AI 沒有標到 keyword 的遺漏問題）
             entity_events = []
             for m in sorted_memories:
@@ -182,12 +188,25 @@ def chat(request: ChatRequest):
             }
         ).execute()
         
+        # 2.5 實體 (Entity) 雙重檢索
+        # 抓取目前資料庫中所有的核心實體檔案
+        entities_res = supabase.table("entities").select("*").execute()
+        entity_context = ""
+        if entities_res.data:
+            mentioned_entities = [e for e in entities_res.data if e['name'] in request.message]
+            if mentioned_entities:
+                entity_context = "\n【核心人物檔案 (Entity Profiles)】\n系統偵測到使用者提及了以下核心人物，請嚴格參考這些人設檔案來進行行為分析：\n"
+                for e in mentioned_entities:
+                    entity_context += f"👤 {e['name']} (關係：{e['relationship']})\n"
+                    entity_context += f"   行為分析：{e['description']}\n"
+        
         # 3. 整理記憶上下文
         memory_context = ""
         if search_results.data and len(search_results.data) > 0:
             memory_context = "【系統擷取到的相關歷史記憶】\n"
             for mem in search_results.data:
-                memory_context += f"- 日期：{mem['diary_date']} (主題：{mem['topic']})\n"
+                time_str = f" {mem.get('diary_time', '')}" if mem.get('diary_time') else ""
+                memory_context += f"- 日期：{mem['diary_date']}{time_str} (主題：{mem['topic']})\n"
                 memory_context += f"  記憶細節：{mem['summary']}\n"
             memory_context += "\n請根據以上歷史記憶，如果記憶內容與使用者的問題或當前對話上下文相關，就自然地融入對話中回答，展現出「你記得這些事」的陪伴感。如果無關，則正常對話即可，不需要刻意提及記憶。\n\n"
         else:
@@ -197,11 +216,19 @@ def chat(request: ChatRequest):
         current_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         system_instruction = f"""
-        你是一個充滿同理心、溫暖且能理解人類情感的智慧伴侶。
-        目前系統的絕對時間為：{current_time_str}。
-        請以此時間為基準，精確理解使用者提及的「今天」、「昨天」、「明天」或「上週」等相對時間概念。
-        你的回應應該自然、溫暖，像一個傾聽者，用繁體中文回答。
+        你是一個敏銳、重視邏輯，但說話風格像是一個「亦師亦友的高階幕僚」或「專屬架構師」。
+        你的任務是幫使用者（蕭蕭）分析她與他人的互動，拆解對方的行為模式與潛在邏輯。
         
+        【回應風格準則】：
+        1. 保持理性與客觀的分析，不需要過度煽情的安慰，但語氣請保持「自然、幽默、帶有人情味」，像一個聰明的朋友在跟你討論，絕對不要聽起來像冷冰冰的報告機器人。
+        2. 善用條列式、結構化的方式拆解分析（例如：推測對方心理、行為動機、情境推測）。
+        3. 可以適度穿插一些資訊/系統術語來比喻人類行為（例如：批次處理、休眠模式、Ping），作為一種有趣的幽默感，但不要滿口生硬的醫學或電腦專有名詞。
+        4. 根據使用者提供的互動細節，給出具體且實用的「處置建議」或「下一步對策」。
+        
+        目前系統的絕對時間為：{current_time_str}。請以此時間為基準來理解「今天」、「昨天」等時間差。
+        請用繁體中文回答。
+        
+        {entity_context}
         {memory_context}
         """
         
@@ -218,9 +245,19 @@ def chat(request: ChatRequest):
             ),
             history=formatted_history
         )
-        response = chat_session.send_message(request.message)
         
-        return {"reply": response.text}
+        import time
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = chat_session.send_message(request.message)
+                return {"reply": response.text}
+            except Exception as e:
+                if "503" in str(e) and attempt < max_retries - 1:
+                    print(f"Chat API 503 Error. Retrying in 3 seconds... (Attempt {attempt + 1}/{max_retries})")
+                    time.sleep(3)
+                else:
+                    raise e
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -326,7 +363,9 @@ class MemoryCreate(BaseModel):
     summary: str
     emotion_score: int
     keywords: List[str]
-    original_text: str
+    original_text: Optional[str] = ""
+    content: Optional[str] = ""
+    importance_weight: Optional[int] = 3
 
 @app.get("/api/memories")
 def get_memories():
@@ -338,16 +377,117 @@ def get_memories():
         traceback.print_exc()
         return {"error": str(e)}
 
+@app.post("/api/memories")
+def create_memory(memory: MemoryCreate):
+    try:
+        data = memory.model_dump()
+        
+        # 處理欄位對應：將 original_text 轉入 content
+        if data.get('original_text'):
+            data['content'] = data['original_text']
+            
+        if 'original_text' in data:
+            del data['original_text']
+            
+        # 自動計算 embedding
+        embedding_text = f"[{data.get('diary_date', '')}] 標籤:{data.get('topic', '')} - {data.get('summary', '')}。相關細節：{', '.join(data.get('keywords', []))}。原文：{data.get('content', '')}"
+        data['embedding'] = get_embedding(embedding_text)
+        
+        response = supabase.table("memories").insert(data).execute()
+        return {"success": True, "data": response.data}
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.put("/api/memories/{memory_id}")
 def update_memory(memory_id: str, memory: MemoryUpdate):
     try:
         update_data = {k: v for k, v in memory.model_dump().items() if v is not None}
         if not update_data:
             return {"success": True}
+            
+        if update_data.get('original_text'):
+            update_data['content'] = update_data['original_text']
+        if 'original_text' in update_data:
+            del update_data['original_text']
+            
+        # 如果有更新到內容相關的欄位，重新計算 embedding
+        if any(k in update_data for k in ['summary', 'topic', 'keywords', 'content', 'diary_date']):
+            # 先取得原本的資料來補全
+            old_data = supabase.table("memories").select("diary_date, topic, summary, keywords, content").eq("id", memory_id).execute().data[0]
+            date = update_data.get('diary_date', old_data.get('diary_date', ''))
+            topic = update_data.get('topic', old_data.get('topic', ''))
+            summary = update_data.get('summary', old_data.get('summary', ''))
+            keywords = update_data.get('keywords', old_data.get('keywords', []))
+            content = update_data.get('content', old_data.get('content', ''))
+            
+            embedding_text = f"[{date}] 標籤:{topic} - {summary}。相關細節：{', '.join(keywords)}。原文：{content}"
+            update_data['embedding'] = get_embedding(embedding_text)
         
         response = supabase.table("memories").update(update_data).eq("id", memory_id).execute()
         return {"success": True, "data": response.data}
     except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/api/chat/summarize")
+def summarize_chat(request: ChatRequest):
+    try:
+        current_date = datetime.datetime.now().strftime("%Y-%m-%d")
+        current_time = datetime.datetime.now().strftime("%H:%M")
+        
+        chat_text = ""
+        for msg in request.history:
+            role = "AI" if msg['role'] == 'ai' or msg['role'] == 'model' else "我"
+            chat_text += f"{role}: {msg['content']}\n"
+            
+        # 加上最後一句話
+        chat_text += f"我: {request.message}\n"
+
+        prompt = f"""
+        你是一個記憶萃取專家。以下是我（蕭蕭）與 AI 的最新一段對話紀錄。
+        這段對話可能包含了今天發生的事情、我的抱怨、或是新資訊。
+        請判斷這段對話包含了「幾個獨立的事件或主題」。
+        
+        請將每個獨立事件切割出來，提取豐富細節，並輸出為純 JSON 陣列 (Array) 格式（不要包含 ```json 等 Markdown 標記，直接回傳 [ 開始的字串）：
+        [
+            {{
+                "summary": "一段約50字的精要總結（請統一使用第一人稱「我」來代表蕭蕭）",
+                "topic": "這個事件的主要標籤（簡短名詞），例如：感情、專題討論、閒聊",
+                "keywords": ["關鍵字1", "關鍵字2", "具體人事物"],
+                "emotion_score": 0到100的整數 (0是最負面悲傷，100是最快樂正面，50是平靜),
+                "importance_weight": 1到5的整數 (1是最不重要，5是對人生影響重大),
+                "content_chunk": "與這個事件相關的對話重點或原汁原味的金句紀錄",
+                "diary_date": "{current_date}",
+                "diary_time": "{current_time}"
+            }}
+        ]
+        
+        對話紀錄：
+        {chat_text}
+        """
+
+        import time
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                    )
+                )
+                
+                events = json.loads(response.text)
+                return {"success": True, "events": events}
+            except Exception as e:
+                if "503" in str(e) and attempt < max_retries - 1:
+                    print(f"Summarize API 503 Error. Retrying in 3 seconds... (Attempt {attempt + 1}/{max_retries})")
+                    time.sleep(3)
+                else:
+                    raise e
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return {"error": str(e)}
 
 @app.delete("/api/memories/{memory_id}")
@@ -358,11 +498,16 @@ def delete_memory(memory_id: str):
     except Exception as e:
         return {"error": str(e)}
 
-@app.post("/api/memories")
-def create_memory(memory: MemoryCreate):
+
+
+@app.post("/api/entities/build")
+def trigger_build_entities():
+    import subprocess
+    import sys
     try:
-        response = supabase.table("memories").insert(memory.model_dump()).execute()
-        return {"success": True, "data": response.data}
+        # 使用 sys.executable 確保背景執行時是使用當前 venv 的 python，而不是系統的 python
+        subprocess.Popen([sys.executable, "scripts/build_entities.py"])
+        return {"success": True, "message": "已成功觸發核心人物檔案編譯！系統正在背景努力更新大腦中。"}
     except Exception as e:
         return {"error": str(e)}
 

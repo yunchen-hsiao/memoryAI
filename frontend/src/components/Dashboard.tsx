@@ -19,6 +19,20 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [selectedEntityIdx, setSelectedEntityIdx] = useState(0);
 
+  const handleBuildEntities = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/entities/build', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        alert('⚡ ' + data.message);
+      } else {
+        alert('❌ 編譯失敗：' + data.error);
+      }
+    } catch (err) {
+      alert('❌ 網路錯誤：' + err);
+    }
+  };
+
   useEffect(() => {
     fetch('http://localhost:8000/api/dashboard/stats')
       .then(res => res.json())
@@ -47,9 +61,17 @@ export default function Dashboard() {
 
   return (
     <div className="h-full flex flex-col gap-6 p-6 overflow-y-auto">
-      <div className="flex items-center gap-3 mb-2">
-        <Brain className="w-8 h-8 text-emerald-400" />
-        <h2 className="text-2xl font-bold bg-gradient-to-r from-emerald-400 to-teal-500 bg-clip-text text-transparent">大腦記憶儀表板</h2>
+      <div className="flex justify-between items-center mb-2">
+        <div className="flex items-center gap-3">
+          <Brain className="w-8 h-8 text-emerald-400" />
+          <h2 className="text-2xl font-bold bg-gradient-to-r from-emerald-400 to-teal-500 bg-clip-text text-transparent">大腦記憶儀表板</h2>
+        </div>
+        <button 
+          onClick={handleBuildEntities}
+          className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded-lg border border-amber-500/30 transition-colors shadow-[0_0_10px_rgba(251,191,36,0.1)] text-sm font-medium"
+        >
+          <span>⚡</span> 重新編譯核心人物網
+        </button>
       </div>
 
       {/* Summary Stats Row */}
