@@ -92,7 +92,11 @@ function App() {
         })
       })
       const data = await res.json()
-      setMessages(prev => [...prev, { role: 'ai', content: data.reply }])
+      if (data.error || !data.reply) {
+        setMessages(prev => [...prev, { role: 'error', content: data.error || '後端回傳了無效的格式' }])
+      } else {
+        setMessages(prev => [...prev, { role: 'ai', content: data.reply }])
+      }
     } catch {
       setMessages(prev => [...prev, { role: 'error', content: 'Failed to connect to backend' }])
     } finally {
