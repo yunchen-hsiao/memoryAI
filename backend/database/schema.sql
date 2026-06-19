@@ -1,9 +1,17 @@
 -- Enable the pgvector extension to work with embedding vectors
 create extension if not exists vector;
 
+-- Create a table for public profiles (optional, stores username/settings)
+create table public.profiles (
+  id uuid references auth.users on delete cascade not null primary key,
+  username text unique,
+  created_at timestamp with time zone default timezone('utc'::text, now())
+);
+
 -- Create memories table
 create table memories (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete cascade, -- Link to Supabase Auth User
   content text not null, -- The original text
   summary text not null, -- AI generated summary
   topic text,
@@ -19,6 +27,7 @@ create table memories (
 -- Create entities table for coreference resolution (Who is "he/she/it")
 create table entities (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete cascade, -- Link to Supabase Auth User
   name text not null,
   description text,
   relationship text,
@@ -30,6 +39,7 @@ create or replace function search_memories(
   query_embedding vector(3072),
   match_threshold float,
   match_count int,
+  p_user_id uuid, -- User ID parameter
   time_weight_factor float default 0.3 -- How much time decay affects the score (0 to 1)
 )
 returns table (
@@ -61,7 +71,9 @@ begin
       (1.0 / (extract(epoch from (now() - memories.diary_date::timestamp))/86400 + 1)) * time_weight_factor
     ) as final_score
   from memories
-  where 1 - (memories.embedding <=> query_embedding) > match_threshold
+  where 
+    memories.user_id = p_user_id -- Filter by user
+    and 1 - (memories.embedding <=> query_embedding) > match_threshold
   order by final_score desc
   limit match_count;
 end;

@@ -1,5 +1,6 @@
 import json
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
@@ -41,15 +42,33 @@ class ChatRequest(BaseModel):
 def health_check():
     return {"status": "ok", "message": "MemoryAI Backend is running!"}
 
-@app.get("/api/dashboard/stats")
-def get_dashboard_stats():
+security = HTTPBearer()
+
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
     try:
-        # 從 Supabase 撈出所有記憶
-        response = supabase.table("memories").select("diary_date, emotion_score, topic, keywords, summary").execute()
+        # 透過 Supabase Auth 驗證 JWT
+        user_res = supabase.auth.get_user(token)
+        if not user_res or not user_res.user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        return user_res.user
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
+
+@app.get("/api/dashboard/stats")
+def get_dashboard_stats(current_user = Depends(get_current_user)):
+    try:
+        # 從 Supabase 撈出該使用者的所有記憶
+        response = supabase.table("memories").select("diary_date, emotion_score, topic, keywords, summary").eq("user_id", current_user.id).execute()
         memories = response.data
 
         if not memories:
-            return {"emotion_trends": [], "topic_distribution": []}
+            return {
+                "emotion_trends": [], 
+                "keyword_distribution": [],
+                "summary_stats": {"total_days": 0, "avg_score": 0, "top_keyword": "無"},
+                "entity_analysis": []
+            }
 
         # 整理情緒趨勢 (按日期平均)
         date_scores = {}
@@ -175,7 +194,7 @@ def get_embedding(text: str) -> list[float]:
     return response.embeddings[0].values
 
 @app.post("/api/chat")
-def chat(request: ChatRequest):
+def chat(request: ChatRequest, current_user = Depends(get_current_user)):
     try:
         # 1. 將使用者的問題轉成向量
         query_embedding = get_embedding(request.message)
@@ -187,13 +206,14 @@ def chat(request: ChatRequest):
                 'query_embedding': query_embedding,
                 'match_threshold': 0.4, # 相似度門檻
                 'match_count': 5,      # 最多取 5 筆最相關的
+                'p_user_id': current_user.id, # 確保只搜尋自己的記憶
                 'time_weight_factor': 0.2 # 時間衰減權重 (0.2 表示輕微偏好近期的記憶)
             }
         ).execute()
         
         # 2.5 實體 (Entity) 雙重檢索
         # 抓取目前資料庫中所有的核心實體檔案
-        entities_res = supabase.table("entities").select("*").execute()
+        entities_res = supabase.table("entities").select("*").eq("user_id", current_user.id).execute()
         entity_context = ""
         if entities_res.data:
             mentioned_entities = [e for e in entities_res.data if e['name'] in request.message]
@@ -264,14 +284,14 @@ def chat(request: ChatRequest):
                     raise e
     except Exception as e:
         import traceback
-        traceback.print_exc()
-        print(f"Error: {e}")
-        return {"reply": f"抱歉，大腦暫時連線失敗，請稍後再試。錯誤原因: {str(e)}"}
+
+# ... (Previous code remains same until dashboard/graph endpoint)
 
 @app.get("/api/dashboard/graph")
-def get_dashboard_graph():
+def get_dashboard_graph(current_user = Depends(get_current_user)):
     try:
-        response = supabase.table("memories").select("id, diary_date, emotion_score, topic, keywords, summary").execute()
+        # 從 Supabase 撈出該使用者的所有人物關係與記憶
+        response = supabase.table("memories").select("id, diary_date, emotion_score, topic, keywords, summary").eq("user_id", current_user.id).execute()
         memories = response.data
 
         if not memories:
@@ -371,10 +391,14 @@ class MemoryCreate(BaseModel):
     content: Optional[str] = ""
     importance_weight: Optional[int] = 3
 
+class ImportSingleRequest(BaseModel):
+    date_str: str
+    content: str
+
 @app.get("/api/memories")
-def get_memories():
+def get_memories(current_user = Depends(get_current_user)):
     try:
-        response = supabase.table("memories").select("*").order("diary_date", desc=True).execute()
+        response = supabase.table("memories").select("*").eq("user_id", current_user.id).order("diary_date", desc=True).execute()
         return {"memories": response.data}
     except Exception as e:
         import traceback
@@ -382,9 +406,12 @@ def get_memories():
         return {"error": str(e)}
 
 @app.post("/api/memories")
-def create_memory(memory: MemoryCreate):
+def create_memory(memory: MemoryCreate, current_user = Depends(get_current_user)):
     try:
         data = memory.model_dump()
+        
+        # 加入 user_id
+        data['user_id'] = current_user.id
         
         # 處理欄位對應：將 original_text 轉入 content
         if data.get('original_text'):
@@ -403,8 +430,14 @@ def create_memory(memory: MemoryCreate):
         return {"error": str(e)}
 
 @app.put("/api/memories/{memory_id}")
-def update_memory(memory_id: str, memory: MemoryUpdate):
+def update_memory(memory_id: str, memory: MemoryUpdate, current_user = Depends(get_current_user)):
     try:
+        # 首先驗證這筆記憶是否屬於該使用者
+        old_data_res = supabase.table("memories").select("user_id, diary_date, topic, summary, keywords, content").eq("id", memory_id).execute()
+        if not old_data_res.data or old_data_res.data[0].get('user_id') != current_user.id:
+            return {"error": "Unauthorized or memory not found"}
+            
+        old_data = old_data_res.data[0]
         update_data = {k: v for k, v in memory.model_dump().items() if v is not None}
         if not update_data:
             return {"success": True}
@@ -416,8 +449,6 @@ def update_memory(memory_id: str, memory: MemoryUpdate):
             
         # 如果有更新到內容相關的欄位，重新計算 embedding
         if any(k in update_data for k in ['summary', 'topic', 'keywords', 'content', 'diary_date']):
-            # 先取得原本的資料來補全
-            old_data = supabase.table("memories").select("diary_date, topic, summary, keywords, content").eq("id", memory_id).execute().data[0]
             date = update_data.get('diary_date', old_data.get('diary_date', ''))
             topic = update_data.get('topic', old_data.get('topic', ''))
             summary = update_data.get('summary', old_data.get('summary', ''))
@@ -427,7 +458,7 @@ def update_memory(memory_id: str, memory: MemoryUpdate):
             embedding_text = f"[{date}] 標籤:{topic} - {summary}。相關細節：{', '.join(keywords)}。原文：{content}"
             update_data['embedding'] = get_embedding(embedding_text)
         
-        response = supabase.table("memories").update(update_data).eq("id", memory_id).execute()
+        response = supabase.table("memories").update(update_data).eq("id", memory_id).eq("user_id", current_user.id).execute()
         return {"success": True, "data": response.data}
     except Exception as e:
         return {"error": str(e)}
@@ -495,12 +526,88 @@ def summarize_chat(request: ChatRequest):
         return {"error": str(e)}
 
 @app.delete("/api/memories/{memory_id}")
-def delete_memory(memory_id: str):
+def delete_memory(memory_id: str, current_user = Depends(get_current_user)):
     try:
-        response = supabase.table("memories").delete().eq("id", memory_id).execute()
+        response = supabase.table("memories").delete().eq("id", memory_id).eq("user_id", current_user.id).execute()
         return {"success": True}
     except Exception as e:
         return {"error": str(e)}
+
+@app.post("/api/import/single")
+def import_single_day(request: ImportSingleRequest, current_user = Depends(get_current_user)):
+    try:
+        # 1. 檢查這天是否已有資料（避免重複匯入）
+        existing = supabase.table('memories').select('id').eq('diary_date', request.date_str).eq('user_id', current_user.id).limit(1).execute()
+        if existing.data and len(existing.data) > 0:
+            return {"success": True, "skipped": True, "message": "Date already exists"}
+
+        # 2. 呼叫 Gemini 分析日記
+        prompt = f"""
+        你現在是一個專業的心理分析師與記憶萃取專家。
+        請閱讀以下 {request.date_str} 的日記內容，並判斷這篇日記包含了「幾個獨立的事件或主題」。
+        請將每個獨立事件切割出來，提取豐富細節，並輸出為一個純 JSON 陣列 (Array) 格式（不要包含 ```json 等 Markdown 標記，直接回傳 [ 開始的字串）：
+        [
+            {{
+                "summary": "一段約50字的精要總結（請統一使用第一人稱「我」來代表日記的主人，不要使用「作者」等稱呼）",
+                "topic": "這個事件的主要標籤（簡短名詞），例如：感情、專題討論、鋼琴社",
+                "keywords": ["關鍵字1", "關鍵字2", "陳政煒", "具體人事物"], // 請排除無意義通稱，只留專有名詞或具體事物
+                "emotion_score": 0到100的整數 (0是最負面悲傷，100是最快樂正面，50是平靜),
+                "importance_weight": 1到5的整數 (1是最不重要，5是對人生影響重大),
+                "content_chunk": "與這個事件相關的日記原文段落（請保留原汁原味的金句或所有微小細節，不要刪減）",
+                "diary_time": "如果日記中有提到具體時間（如：傍晚六點半、早上），請推斷轉換為 24 小時制的 HH:MM 字串（例如：18:30, 08:00）；如果完全沒提到時間，請填 null"
+            }}
+        ]
+        如果整篇日記只有一個主題，就回傳只有一個物件的陣列。
+        日記內容：
+        {request.content}
+        """
+
+        import time
+        max_retries = 3
+        events = None
+        for attempt in range(max_retries):
+            try:
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=prompt,
+                    config=types.GenerateContentConfig(response_mime_type="application/json")
+                )
+                events = json.loads(response.text)
+                break
+            except Exception as e:
+                if "503" in str(e) and attempt < max_retries - 1:
+                    time.sleep(3)
+                elif attempt == max_retries - 1:
+                    raise e
+                    
+        if not events:
+            return {"success": False, "error": "Failed to parse events"}
+
+        inserted_count = 0
+        for event in events:
+            embedding_text = f"[{request.date_str}] 標籤:{event.get('topic','')} - {event.get('summary','')}。相關細節：{', '.join(event.get('keywords',[]))}。原文：{event.get('content_chunk', '')}"
+            embedding = get_embedding(embedding_text)
+            
+            data = {
+                "user_id": current_user.id,
+                "diary_date": request.date_str,
+                "diary_time": event.get("diary_time"),
+                "topic": event.get("topic", ""),
+                "summary": event.get("summary", ""),
+                "keywords": event.get("keywords", []),
+                "emotion_score": event.get("emotion_score", 50),
+                "importance_weight": event.get("importance_weight", 3),
+                "content": event.get("content_chunk", ""),
+                "embedding": embedding
+            }
+            supabase.table("memories").insert(data).execute()
+            inserted_count += 1
+            
+        return {"success": True, "inserted_count": inserted_count}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
 
 
 

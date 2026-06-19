@@ -5,7 +5,11 @@ import MemoryGraph from './MemoryGraph';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-export default function Dashboard() {
+interface DashboardProps {
+  token: string | null;
+}
+
+export default function Dashboard({ token }: DashboardProps) {
   const [stats, setStats] = useState<{
     emotion_trends: any[], 
     keyword_distribution: any[],
@@ -23,7 +27,10 @@ export default function Dashboard() {
 
   const handleBuildEntities = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/entities/build`, { method: 'POST' });
+      const res = await fetch(`${API_BASE}/api/entities/build`, { 
+        method: 'POST',
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      });
       const data = await res.json();
       if (data.success) {
         alert('⚡ ' + data.message);
@@ -36,7 +43,9 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/dashboard/stats`)
+    fetch(`${API_BASE}/api/dashboard/stats`, {
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+    })
       .then(res => res.json())
       .then(data => {
         setStats(data);
@@ -214,7 +223,7 @@ export default function Dashboard() {
           <h3 className="text-lg font-semibold">記憶星系網路圖 (動態關聯)</h3>
         </div>
         <div className="flex-1 rounded-xl overflow-hidden relative">
-          <MemoryGraph />
+          <MemoryGraph token={token} />
         </div>
       </div>
 
@@ -260,7 +269,7 @@ export default function Dashboard() {
                 <YAxis dataKey="name" type="category" stroke="#94a3b8" fontSize={12} width={80} />
                 <Tooltip cursor={{ fill: '#1e293b' }} contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px' }} itemStyle={{ color: '#34d399' }} formatter={(value: any) => [`${value} 次`, '出現次數']} />
                 <Bar dataKey="value" radius={[0, 4, 4, 0]}>
-                  {stats.keyword_distribution.map((_entry, index) => (
+                  {(stats.keyword_distribution || []).map((_entry, index) => (
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                   ))}
                 </Bar>

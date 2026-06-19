@@ -24,14 +24,16 @@ interface GraphData {
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-export default function MemoryGraph() {
+export default function MemoryGraph({ token }: { token: string | null }) {
   const [data, setData] = useState<GraphData>({ nodes: [], links: [] });
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [selectedMemory, setSelectedMemory] = useState<Node | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/dashboard/graph`)
+    fetch(`${API_BASE}/api/dashboard/graph`, {
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+    })
       .then(res => res.json())
       .then(fetchedData => {
         if (fetchedData && fetchedData.nodes && fetchedData.links) {
@@ -41,7 +43,7 @@ export default function MemoryGraph() {
         }
       })
       .catch(err => console.error("Graph fetch error:", err));
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     // Measure container size for graph

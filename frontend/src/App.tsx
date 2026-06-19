@@ -4,7 +4,10 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import Dashboard from './components/Dashboard'
 import MemoryTimeline from './components/MemoryTimeline'
-import { MessageSquare, LayoutDashboard, History, Trash2, Menu, X } from 'lucide-react'
+import { MessageSquare, LayoutDashboard, History, Trash2, Menu, X, LogOut, UploadCloud } from 'lucide-react'
+import AuthScreen from './components/AuthScreen'
+import BatchImport from './components/BatchImport'
+import { supabase } from './supabase'
 
 interface SummarizedEvent {
   summary: string;
@@ -20,7 +23,7 @@ interface SummarizedEvent {
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 function App() {
-  const [activeTab, setActiveTab] = useState<'chat' | 'dashboard' | 'timeline'>('chat')
+  const [activeTab, setActiveTab] = useState<'chat' | 'dashboard' | 'timeline' | 'import'>('chat')
   const [healthStatus, setHealthStatus] = useState<string>('Checking backend...')
   const [messages, setMessages] = useState<{role: string, content: string}[]>([])
   const [input, setInput] = useState('')
@@ -28,6 +31,8 @@ function App() {
   const [isSummarizing, setIsSummarizing] = useState(false)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [summarizedEvents, setSummarizedEvents] = useState<SummarizedEvent[] | null>(null)
+  const [session, setSession] = useState<any>(null)
+  const [isAuthLoading, setIsAuthLoading] = useState(true)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -45,6 +50,20 @@ function App() {
       .then(res => res.json())
       .then(data => setHealthStatus(data.message))
       .catch(() => setHealthStatus('Backend is offline'))
+
+    // Auth 監聽
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+      setIsAuthLoading(false)
+    })
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session)
+    })
+
+    return () => subscription.unsubscribe()
   }, [])
 
   const handleSend = async () => {
@@ -60,7 +79,10 @@ function App() {
     try {
       const res = await fetch(`${API_BASE}/api/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(session ? { 'Authorization': `Bearer ${session.access_token}` } : {})
+        },
         body: JSON.stringify({ 
           message: input,
           history: currentHistory.map(m => ({
@@ -87,7 +109,10 @@ function App() {
     try {
       const res = await fetch(`${API_BASE}/api/chat/summarize`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(session ? { 'Authorization': `Bearer ${session.access_token}` } : {})
+        },
         body: JSON.stringify({ message: "", history: messages.filter(m => m.role === 'user') })
       });
       const data = await res.json();
@@ -110,7 +135,10 @@ function App() {
       for (const event of summarizedEvents) {
         await fetch(`${API_BASE}/api/memories`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            ...(session ? { 'Authorization': `Bearer ${session.access_token}` } : {})
+          },
           body: JSON.stringify({
             diary_date: event.diary_date,
             diary_time: event.diary_time,
@@ -130,6 +158,18 @@ function App() {
       alert('歸檔過程發生錯誤：' + err);
     }
   };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+  };
+
+  if (isAuthLoading) {
+    return <div className="flex items-center justify-center h-screen bg-slate-900 text-slate-400">Loading...</div>;
+  }
+
+  if (!session) {
+    return <AuthScreen />;
+  }
 
   return (
     <div className="flex flex-col h-screen bg-slate-900 text-slate-50 font-sans">
@@ -185,8 +225,26 @@ function App() {
                 <History className="w-4 h-4" />
                 記憶時光機
               </button>
+              <button
+                onClick={() => setActiveTab('import')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeTab === 'import' 
+                    ? 'bg-slate-700 text-emerald-400 shadow-sm' 
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+                }`}
+              >
+                <UploadCloud className="w-4 h-4" />
+                批次匯入
+              </button>
             </div>
 
+            <button
+              onClick={handleLogout}
+              className="p-2 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-md transition-colors ml-2 hidden lg:block"
+              title="登出"
+            >
+              <LogOut className="w-5 h-5" />
+            </button>
           </div>
         </div>
 
@@ -238,15 +296,38 @@ function App() {
             <History className="w-5 h-5" />
             記憶時光機
           </button>
+          <button
+            onClick={() => { setActiveTab('import'); setIsMobileMenuOpen(false); }}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium transition-all ${
+              activeTab === 'import' ? 'bg-slate-800 text-emerald-400' : 'text-slate-300'
+            }`}
+          >
+            <UploadCloud className="w-5 h-5" />
+            批次匯入
+          </button>
+          <div className="h-px bg-slate-800 my-1"></div>
+          <button
+            onClick={() => { handleLogout(); setIsMobileMenuOpen(false); }}
+            className="flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium transition-all text-slate-300 hover:text-rose-400 hover:bg-rose-500/10"
+          >
+            <LogOut className="w-5 h-5" />
+            登出
+          </button>
         </div>
       )}
 
       <div className="flex-1 flex overflow-hidden flex-col lg:flex-row">
-        <div className={`flex-col border-r border-slate-800 ${['dashboard', 'timeline'].includes(activeTab) ? 'flex' : 'hidden lg:flex'} lg:w-[60%] h-full overflow-hidden bg-slate-900/50`}>
-          {activeTab === 'timeline' ? <MemoryTimeline /> : <Dashboard />}
-        </div>
+        {activeTab === 'import' ? (
+          <div className="flex-1 overflow-y-auto w-full h-full bg-slate-900/50">
+            <BatchImport token={session?.access_token || null} />
+          </div>
+        ) : (
+          <>
+            <div className={`flex-col border-r border-slate-800 ${['dashboard', 'timeline'].includes(activeTab) ? 'flex' : 'hidden lg:flex'} lg:w-[60%] h-full overflow-hidden bg-slate-900/50`}>
+              {activeTab === 'timeline' ? <MemoryTimeline token={session?.access_token || null} /> : <Dashboard token={session?.access_token || null} />}
+            </div>
 
-        <div className={`flex-col flex-1 ${activeTab === 'chat' ? 'flex' : 'hidden lg:flex'} h-full bg-slate-900`}>
+            <div className={`flex-col flex-1 ${activeTab === 'chat' ? 'flex' : 'hidden lg:flex'} h-full bg-slate-900`}>
           <main className="flex-1 overflow-y-auto p-6 flex flex-col gap-6">
             {messages.length === 0 && (
               <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-4">
@@ -314,6 +395,8 @@ function App() {
             </div>
           </footer>
         </div>
+        </>
+        )}
       </div>
 
       {summarizedEvents && (

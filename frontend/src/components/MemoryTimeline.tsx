@@ -12,9 +12,13 @@ interface Memory {
   original_text: string;
 }
 
+interface MemoryTimelineProps {
+  token: string | null;
+}
+
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-export default function MemoryTimeline() {
+export default function MemoryTimeline({ token }: MemoryTimelineProps) {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -26,7 +30,9 @@ export default function MemoryTimeline() {
   const fetchMemories = async () => {
     try {
       setLoading(true);
-      const res = await fetch(`${API_BASE}/api/memories`);
+      const res = await fetch(`${API_BASE}/api/memories`, {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      });
       const data = await res.json();
       if (data.memories) {
         const sorted = data.memories.sort((a: Memory, b: Memory) => {
@@ -51,9 +57,12 @@ export default function MemoryTimeline() {
   }, []);
 
   const handleDelete = async (id: string) => {
-    if (!window.confirm('確定要刪除這段記憶嗎？此動作無法復原。')) return;
+    if (!window.confirm('確定要刪除這筆記憶嗎？')) return;
     try {
-      const res = await fetch(`${API_BASE}/api/memories/${id}`, { method: 'DELETE' });
+      const res = await fetch(`${API_BASE}/api/memories/${id}`, { 
+        method: 'DELETE',
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      });
       if (res.ok) {
         setMemories(memories.filter(m => m.id !== id));
       }
@@ -64,31 +73,35 @@ export default function MemoryTimeline() {
 
   const handleSave = async () => {
     try {
-      if (editingMemory.id) {
-        // Update
-        const res = await fetch(`${API_BASE}/api/memories/${editingMemory.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(editingMemory)
-        });
-        if (res.ok) {
-          fetchMemories();
-          setIsEditModalOpen(false);
-        }
+      const isUpdate = !!editingMemory.id;
+      const url = isUpdate 
+        ? `${API_BASE}/api/memories/${editingMemory.id}` 
+        : `${API_BASE}/api/memories`;
+      
+      const payload = { ...editingMemory };
+      if (!isUpdate) {
+        delete payload.id; // 新增時不需要 id
+      }
+      
+      const res = await fetch(url, {
+        method: isUpdate ? 'PUT' : 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify(payload)
+      });
+      
+      if (res.ok) {
+        fetchMemories();
+        setIsEditModalOpen(false);
       } else {
-        // Create
-        const res = await fetch(`${API_BASE}/api/memories`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(editingMemory)
-        });
-        if (res.ok) {
-          fetchMemories();
-          setIsEditModalOpen(false);
-        }
+        const errData = await res.json();
+        alert('儲存失敗：' + (errData.error || '未知錯誤'));
       }
     } catch (err) {
       console.error(err);
+      alert('儲存失敗：' + String(err));
     }
   };
 
