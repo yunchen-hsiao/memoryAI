@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import Dashboard from './components/Dashboard'
 import MemoryTimeline from './components/MemoryTimeline'
-import { MessageSquare, LayoutDashboard, History, Trash2, Menu, X, LogOut, UploadCloud } from 'lucide-react'
+import { MessageSquare, LayoutDashboard, History, Trash2, Menu, X, LogOut, UploadCloud, ShieldCheck } from 'lucide-react'
 import AuthScreen from './components/AuthScreen'
 import BatchImport from './components/BatchImport'
 import { supabase } from './supabase'
@@ -30,6 +30,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false)
   const [isSummarizing, setIsSummarizing] = useState(false)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false)
   const [summarizedEvents, setSummarizedEvents] = useState<SummarizedEvent[] | null>(null)
   const [session, setSession] = useState<any>(null)
   const [isAuthLoading, setIsAuthLoading] = useState(true)
@@ -242,13 +243,23 @@ function App() {
               </button>
             </div>
 
-            <button
-              onClick={handleLogout}
-              className="p-2 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-md transition-colors ml-2 hidden lg:block"
-              title="登出"
-            >
-              <LogOut className="w-5 h-5" />
-            </button>
+            <div className="flex items-center">
+              <button
+                onClick={() => setShowPrivacyModal(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 mr-2 rounded-md text-xs font-medium text-emerald-400/80 hover:text-emerald-300 hover:bg-emerald-500/10 transition-all border border-emerald-500/20 hidden lg:flex"
+                title="隱私與安全防護聲明"
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+                隱私防護中
+              </button>
+              <button
+                onClick={handleLogout}
+                className="p-2 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-md transition-colors hidden lg:block"
+                title="登出"
+              >
+                <LogOut className="w-5 h-5" />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -310,6 +321,13 @@ function App() {
             批次匯入
           </button>
           <div className="h-px bg-slate-800 my-1"></div>
+          <button
+            onClick={() => { setShowPrivacyModal(true); setIsMobileMenuOpen(false); }}
+            className="flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium transition-all text-emerald-400 hover:bg-emerald-500/10"
+          >
+            <ShieldCheck className="w-5 h-5" />
+            隱私與安全防護聲明
+          </button>
           <button
             onClick={() => { handleLogout(); setIsMobileMenuOpen(false); }}
             className="flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium transition-all text-slate-300 hover:text-rose-400 hover:bg-rose-500/10"
@@ -489,6 +507,51 @@ function App() {
               </button>
               <button onClick={handleArchive} className="px-5 py-2.5 text-slate-900 bg-emerald-500 hover:bg-emerald-400 font-bold rounded-xl transition-colors shadow-[0_0_15px_rgba(52,211,153,0.3)]">
                 確定歸檔並清空對話
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Privacy Policy Modal */}
+      {showPrivacyModal && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-[60]">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col">
+            <div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center bg-slate-800/50">
+              <h3 className="text-lg font-bold text-slate-200 flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                隱私與資料安全聲明
+              </h3>
+              <button onClick={() => setShowPrivacyModal(false)} className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-700 transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto custom-scrollbar text-slate-300 text-sm leading-relaxed space-y-4">
+              <p>我們極度重視您的個人隱私與資料安全。為了確保您的記憶與日記內容不被未經授權的第三方（包含資料庫管理員）窺探，我們採取了以下措施：</p>
+              
+              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 space-y-2">
+                <h4 className="font-bold text-emerald-400 flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                  端到端應用層加密 (E2E Application-Level Encryption)
+                </h4>
+                <p>所有您輸入的敏感文字內容（如：日記原文、事件摘要），在離開伺服器並寫入資料庫之前，都會被自動轉換為不可讀的加密亂碼。即使擁有最高權限的資料庫管理員，也無法在後台肉眼解讀您的真實資料。</p>
+              </div>
+
+              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 space-y-2">
+                <h4 className="font-bold text-blue-400 flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
+                  AI 僅作分析用途
+                </h4>
+                <p>只有當您在進行對話檢索或編譯核心人物時，系統才會短暫解密資料並傳遞給 AI 進行分析。所有分析結果僅供您的帳號存取，絕不會做為訓練公開模型之用。</p>
+              </div>
+
+              <p className="text-xs text-slate-500 text-center pt-2">感謝您的信任，MemoryAI 致力於提供一個安全可靠的數位大腦環境。</p>
+            </div>
+
+            <div className="px-6 py-4 border-t border-slate-800 flex justify-end bg-slate-900">
+              <button onClick={() => setShowPrivacyModal(false)} className="px-5 py-2 text-slate-900 bg-emerald-500 hover:bg-emerald-400 font-bold rounded-xl transition-colors shadow-[0_0_15px_rgba(52,211,153,0.3)]">
+                我了解了
               </button>
             </div>
           </div>

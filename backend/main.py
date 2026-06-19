@@ -11,6 +11,7 @@ from google.genai import types
 from supabase import create_client, Client
 
 load_dotenv()
+from security import encrypt_text, decrypt_text
 
 # Configure Supabase
 supabase_url = os.environ.get("SUPABASE_URL")
@@ -60,8 +61,10 @@ def get_dashboard_stats(current_user = Depends(get_current_user)):
     try:
         # 從 Supabase 撈出該使用者的所有記憶
         response = supabase.table("memories").select("diary_date, emotion_score, topic, keywords, summary").eq("user_id", current_user.id).execute()
-        memories = response.data
-
+        memories = response.data or []
+        for m in memories:
+            m['summary'] = decrypt_text(m.get('summary', ''))
+        
         if not memories:
             return {
                 "emotion_trends": [], 
@@ -220,6 +223,8 @@ def chat(request: ChatRequest, current_user = Depends(get_current_user)):
             if mentioned_entities:
                 entity_context = "\n【核心人物檔案 (Entity Profiles)】\n系統偵測到使用者提及了以下核心人物，請嚴格參考這些人設檔案來進行行為分析：\n"
                 for e in mentioned_entities:
+                    e['relationship'] = decrypt_text(e.get('relationship', ''))
+                    e['description'] = decrypt_text(e.get('description', ''))
                     entity_context += f"👤 {e['name']} (關係：{e['relationship']})\n"
                     entity_context += f"   行為分析：{e['description']}\n"
         
@@ -228,6 +233,7 @@ def chat(request: ChatRequest, current_user = Depends(get_current_user)):
         if search_results.data and len(search_results.data) > 0:
             memory_context = "【系統擷取到的相關歷史記憶】\n"
             for mem in search_results.data:
+                mem['summary'] = decrypt_text(mem.get('summary', ''))
                 time_str = f" {mem.get('diary_time', '')}" if mem.get('diary_time') else ""
                 memory_context += f"- 日期：{mem['diary_date']}{time_str} (主題：{mem['topic']})\n"
                 memory_context += f"  記憶細節：{mem['summary']}\n"
@@ -240,7 +246,7 @@ def chat(request: ChatRequest, current_user = Depends(get_current_user)):
         
         system_instruction = f"""
         你是一個敏銳、重視邏輯，但說話風格像是一個「亦師亦友的高階幕僚」或「專屬架構師」。
-        你的任務是幫使用者（蕭蕭）分析她與他人的互動，拆解對方的行為模式與潛在邏輯。
+        你的任務是幫使用者分析他們與他人的互動，拆解對方的行為模式與潛在邏輯。
         
         【回應風格準則】：
         1. 保持理性與客觀的分析，不需要過度煽情的安慰，但語氣請保持「自然、幽默、帶有人情味」，像一個聰明的朋友在跟你討論，絕對不要聽起來像冷冰冰的報告機器人。
@@ -399,6 +405,9 @@ class ImportSingleRequest(BaseModel):
 def get_memories(current_user = Depends(get_current_user)):
     try:
         response = supabase.table("memories").select("*").eq("user_id", current_user.id).order("diary_date", desc=True).execute()
+        for m in response.data:
+            m['summary'] = decrypt_text(m.get('summary', ''))
+            m['content'] = decrypt_text(m.get('content', ''))
         return {"memories": response.data}
     except Exception as e:
         import traceback
@@ -424,6 +433,10 @@ def create_memory(memory: MemoryCreate, current_user = Depends(get_current_user)
         embedding_text = f"[{data.get('diary_date', '')}] 標籤:{data.get('topic', '')} - {data.get('summary', '')}。相關細節：{', '.join(data.get('keywords', []))}。原文：{data.get('content', '')}"
         data['embedding'] = get_embedding(embedding_text)
         
+        # 加密
+        data['summary'] = encrypt_text(data.get('summary', ''), current_user.email)
+        data['content'] = encrypt_text(data.get('content', ''), current_user.email)
+        
         response = supabase.table("memories").insert(data).execute()
         return {"success": True, "data": response.data}
     except Exception as e:
@@ -438,6 +451,10 @@ def update_memory(memory_id: str, memory: MemoryUpdate, current_user = Depends(g
             return {"error": "Unauthorized or memory not found"}
             
         old_data = old_data_res.data[0]
+        # 解密 old_data
+        old_data['summary'] = decrypt_text(old_data.get('summary', ''))
+        old_data['content'] = decrypt_text(old_data.get('content', ''))
+        
         update_data = {k: v for k, v in memory.model_dump().items() if v is not None}
         if not update_data:
             return {"success": True}
@@ -457,6 +474,12 @@ def update_memory(memory_id: str, memory: MemoryUpdate, current_user = Depends(g
             
             embedding_text = f"[{date}] 標籤:{topic} - {summary}。相關細節：{', '.join(keywords)}。原文：{content}"
             update_data['embedding'] = get_embedding(embedding_text)
+            
+        # 在寫入資料庫前，將要更新的字串加密
+        if 'summary' in update_data:
+            update_data['summary'] = encrypt_text(update_data['summary'], current_user.email)
+        if 'content' in update_data:
+            update_data['content'] = encrypt_text(update_data['content'], current_user.email)
         
         response = supabase.table("memories").update(update_data).eq("id", memory_id).eq("user_id", current_user.id).execute()
         return {"success": True, "data": response.data}
@@ -478,14 +501,14 @@ def summarize_chat(request: ChatRequest):
         chat_text += f"我: {request.message}\n"
 
         prompt = f"""
-        你是一個記憶萃取專家。以下是我（蕭蕭）與 AI 的最新一段對話紀錄。
-        這段對話可能包含了今天發生的事情、我的抱怨、或是新資訊。
+        你是一個記憶萃取專家。以下是使用者與 AI 的最新一段對話紀錄。
+        請你分析這段對話，判斷這段對話中是否有值得被「記憶」或「歸檔」的資訊。
         請判斷這段對話包含了「幾個獨立的事件或主題」。
         
         請將每個獨立事件切割出來，提取豐富細節，並輸出為純 JSON 陣列 (Array) 格式（不要包含 ```json 等 Markdown 標記，直接回傳 [ 開始的字串）：
         [
             {{
-                "summary": "一段約50字的精要總結（請統一使用第一人稱「我」來代表蕭蕭）",
+                "summary": "一段約50字的精要總結（請統一使用第一人稱「我」來代表使用者）",
                 "topic": "這個事件的主要標籤（簡短名詞），例如：感情、專題討論、閒聊",
                 "keywords": ["關鍵字1", "關鍵字2", "具體人事物"],
                 "emotion_score": 0到100的整數 (0是最負面悲傷，100是最快樂正面，50是平靜),
@@ -593,11 +616,11 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
                 "diary_date": request.date_str,
                 "diary_time": event.get("diary_time"),
                 "topic": event.get("topic", ""),
-                "summary": event.get("summary", ""),
+                "summary": encrypt_text(event.get("summary", ""), current_user.email),
                 "keywords": event.get("keywords", []),
                 "emotion_score": event.get("emotion_score", 50),
                 "importance_weight": event.get("importance_weight", 3),
-                "content": event.get("content_chunk", ""),
+                "content": encrypt_text(event.get("content_chunk", ""), current_user.email),
                 "embedding": embedding
             }
             supabase.table("memories").insert(data).execute()

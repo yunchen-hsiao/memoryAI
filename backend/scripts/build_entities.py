@@ -18,6 +18,8 @@ supabase: Client = create_client(supabase_url, supabase_key)
 client = genai.Client()
 
 import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from security import decrypt_text
 
 def build_entities():
     if len(sys.argv) < 2:
@@ -29,8 +31,10 @@ def build_entities():
     
     # 1. 抓取使用者的所有記憶
     res = supabase.table("memories").select("id, summary, keywords, topic, diary_date").eq("user_id", user_id).execute()
-    memories = res.data
-    
+    memories = res.data or []
+    for m in memories:
+        m['summary'] = decrypt_text(m.get('summary', ''))
+        
     if not memories:
         print("❌ 沒有找到任何記憶資料。")
         return
@@ -53,10 +57,7 @@ def build_entities():
     # 設定門檻：至少要出現 2 次才算得上是「核心人物」
     top_entities = [kw for kw, count in sorted(keyword_counts.items(), key=lambda x: x[1], reverse=True) if count >= 2][:15]
     
-    # 強制確保特定人物有被納入編譯名單（只要資料庫裡有出現過）
-    for must_have in ["杜宇宸", "鄭旭宸", "陳政煒", "蘇于涵"]:
-        if must_have in keyword_counts and must_have not in top_entities:
-            top_entities.append(must_have)
+    # 4. 請 Gemini 進行深度側寫
     
     if not top_entities:
         print("⚠️ 沒有找到符合門檻的核心實體。")
@@ -71,8 +72,8 @@ def build_entities():
         memories_text = "\n".join(keyword_memories[entity_name])
         
         prompt = f"""
-        你是一個頂尖的人類行為分析師。以下是日記主人（蕭蕭）與關鍵字「{entity_name}」過去的互動紀錄。
-        首先，請判斷「{entity_name}」是不是一個具體的「人物」或「真實生活中的實體群體」（例如：室友、學姐、陳政煒）。如果它只是一個地點（如台北）、一門課（如Linux課）、一個物品、專案或抽象概念（如資料庫、分組），請直接回傳 {{"is_person": false}}。
+        你是一個頂尖的人類行為分析師。以下是日記主人與關鍵字「{entity_name}」過去的互動紀錄。
+        首先，請判斷「{entity_name}」是不是一個具體的「人物」或「真實生活中的實體群體」（例如：室友、學姐、同事）。如果它只是一個地點（如台北）、一門課（如Linux課）、一個物品、專案或抽象概念（如資料庫、分組），請直接回傳 {{"is_person": false}}。
         
         如果確定是人物，請根據這些互動，對「{entity_name}」進行深度的人格側寫與行為分析。
         
@@ -80,7 +81,7 @@ def build_entities():
         {{
             "is_person": true,
             "description": "關於 {entity_name} 的性格特質、行為模式、潛在 MBTI（若能推測）、溝通風格等詳細的分析報告（約100-200字）。",
-            "relationship": "他與蕭蕭之間的關係狀態（例如：關係緊密的大學同學、經常交流的理科直男等，簡短一句話）。"
+            "relationship": "他與使用者之間的關係狀態（例如：關係緊密的大學同學、經常交流的朋友等，簡短一句話）。"
         }}
         
         【互動歷史資料】：
