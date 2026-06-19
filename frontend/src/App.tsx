@@ -25,7 +25,7 @@ const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 function App() {
   const [activeTab, setActiveTab] = useState<'chat' | 'dashboard' | 'timeline' | 'import'>('chat')
   const [healthStatus, setHealthStatus] = useState<string>('Checking backend...')
-  const [messages, setMessages] = useState<{role: string, content: string}[]>([])
+  const [messages, setMessages] = useState<{ role: string, content: string }[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isSummarizing, setIsSummarizing] = useState(false)
@@ -69,10 +69,10 @@ function App() {
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
-    
+
     const userMsg = { role: 'user', content: input }
     const currentHistory = [...messages]
-    
+
     setMessages(prev => [...prev, userMsg])
     setInput('')
     setIsLoading(true)
@@ -80,15 +80,15 @@ function App() {
     try {
       const res = await fetch(`${API_BASE}/api/chat`, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           ...(session ? { 'Authorization': `Bearer ${session.access_token}` } : {})
         },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           message: input,
           history: currentHistory.map(m => ({
-             role: m.role === 'ai' ? 'model' : 'user', 
-             content: m.content 
+            role: m.role === 'ai' ? 'model' : 'user',
+            content: m.content
           }))
         })
       })
@@ -114,7 +114,7 @@ function App() {
     try {
       const res = await fetch(`${API_BASE}/api/chat/summarize`, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           ...(session ? { 'Authorization': `Bearer ${session.access_token}` } : {})
         },
@@ -135,12 +135,12 @@ function App() {
 
   const handleArchive = async () => {
     if (!summarizedEvents) return;
-    
+
     try {
       for (const event of summarizedEvents) {
         await fetch(`${API_BASE}/api/memories`, {
           method: 'POST',
-          headers: { 
+          headers: {
             'Content-Type': 'application/json',
             ...(session ? { 'Authorization': `Bearer ${session.access_token}` } : {})
           },
@@ -182,7 +182,7 @@ function App() {
         <div className="flex items-center gap-4 lg:gap-8">
           <div className="flex items-center gap-3">
             {/* Mobile Hamburger Toggle */}
-            <button 
+            <button
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
               className="lg:hidden p-2 -ml-2 text-slate-400 hover:text-slate-200"
             >
@@ -193,7 +193,7 @@ function App() {
               <span className="text-sm font-normal text-slate-400 hidden sm:inline">心靈伴侶</span>
             </h1>
           </div>
-          
+
           <div className="flex items-center gap-2">
             {/* Desktop Navigation */}
             <div className="hidden lg:flex bg-slate-800/50 p-1 rounded-lg border border-slate-700/50 backdrop-blur-sm">
@@ -210,33 +210,30 @@ function App() {
               </button> */}
               <button
                 onClick={() => setActiveTab('dashboard')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
-                  activeTab === 'dashboard' 
-                    ? 'bg-slate-700 text-emerald-400 shadow-sm' 
+                className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'dashboard'
+                    ? 'bg-slate-700 text-emerald-400 shadow-sm'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
-                }`}
+                  }`}
               >
                 <LayoutDashboard className="w-4 h-4" />
                 大腦儀表板
               </button>
               <button
                 onClick={() => setActiveTab('timeline')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
-                  activeTab === 'timeline' 
-                    ? 'bg-slate-700 text-emerald-400 shadow-sm' 
+                className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'timeline'
+                    ? 'bg-slate-700 text-emerald-400 shadow-sm'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
-                }`}
+                  }`}
               >
                 <History className="w-4 h-4" />
                 記憶時光機
               </button>
               <button
                 onClick={() => setActiveTab('import')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
-                  activeTab === 'import' 
-                    ? 'bg-slate-700 text-emerald-400 shadow-sm' 
+                className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'import'
+                    ? 'bg-slate-700 text-emerald-400 shadow-sm'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
-                }`}
+                  }`}
               >
                 <UploadCloud className="w-4 h-4" />
                 批次匯入
@@ -264,7 +261,7 @@ function App() {
         </div>
 
         <div className="flex items-center gap-4">
-          <button 
+          <button
             onClick={handleSummarize}
             disabled={isSummarizing || messages.length === 0}
             className="text-sm px-4 py-2 bg-slate-800 hover:bg-slate-700 text-emerald-400 rounded-lg border border-emerald-500/30 transition-colors flex items-center gap-2 shadow-[0_0_10px_rgba(52,211,153,0.1)] disabled:opacity-50 disabled:cursor-not-allowed"
@@ -286,36 +283,32 @@ function App() {
         <div className="lg:hidden absolute top-[73px] left-0 right-0 bg-slate-950/95 backdrop-blur-xl border-b border-slate-800 z-50 p-4 flex flex-col gap-2 shadow-2xl">
           <button
             onClick={() => { setActiveTab('chat'); setIsMobileMenuOpen(false); }}
-            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium transition-all ${
-              activeTab === 'chat' ? 'bg-slate-800 text-emerald-400' : 'text-slate-300'
-            }`}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium transition-all ${activeTab === 'chat' ? 'bg-slate-800 text-emerald-400' : 'text-slate-300'
+              }`}
           >
             <MessageSquare className="w-5 h-5" />
             記憶對話
           </button>
           <button
             onClick={() => { setActiveTab('dashboard'); setIsMobileMenuOpen(false); }}
-            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium transition-all ${
-              activeTab === 'dashboard' ? 'bg-slate-800 text-emerald-400' : 'text-slate-300'
-            }`}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium transition-all ${activeTab === 'dashboard' ? 'bg-slate-800 text-emerald-400' : 'text-slate-300'
+              }`}
           >
             <LayoutDashboard className="w-5 h-5" />
             大腦儀表板
           </button>
           <button
             onClick={() => { setActiveTab('timeline'); setIsMobileMenuOpen(false); }}
-            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium transition-all ${
-              activeTab === 'timeline' ? 'bg-slate-800 text-emerald-400' : 'text-slate-300'
-            }`}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium transition-all ${activeTab === 'timeline' ? 'bg-slate-800 text-emerald-400' : 'text-slate-300'
+              }`}
           >
             <History className="w-5 h-5" />
             記憶時光機
           </button>
           <button
             onClick={() => { setActiveTab('import'); setIsMobileMenuOpen(false); }}
-            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium transition-all ${
-              activeTab === 'import' ? 'bg-slate-800 text-emerald-400' : 'text-slate-300'
-            }`}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium transition-all ${activeTab === 'import' ? 'bg-slate-800 text-emerald-400' : 'text-slate-300'
+              }`}
           >
             <UploadCloud className="w-5 h-5" />
             批次匯入
@@ -350,74 +343,73 @@ function App() {
             </div>
 
             <div className={`flex-col flex-1 ${activeTab === 'chat' ? 'flex' : 'hidden lg:flex'} h-full bg-slate-900`}>
-          <main className="flex-1 overflow-y-auto p-6 flex flex-col gap-6">
-            {messages.length === 0 && (
-              <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-4">
-                <div className="w-16 h-16 rounded-full bg-slate-800 flex items-center justify-center text-2xl animate-pulse shadow-[0_0_20px_rgba(52,211,153,0.1)]">
-                  🧠
-                </div>
-                <p>準備好分享你的心情了嗎？</p>
-              </div>
-            )}
-            
-            {messages.map((msg, i) => (
-              <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[85%] lg:max-w-[75%] p-4 rounded-2xl leading-relaxed shadow-sm ${
-                  msg.role === 'user' 
-                    ? 'bg-slate-700 text-slate-50 rounded-br-sm' 
-                    : msg.role === 'error' 
-                      ? 'bg-red-900/50 text-red-200 border border-red-800' 
-                      : 'bg-slate-800 text-slate-200 rounded-bl-sm border border-slate-700/50 relative overflow-hidden'
-                }`}>
-                  {msg.role === 'ai' && (
-                    <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500/50"></div>
-                  )}
-                  {msg.role === 'ai' ? (
-                    <div className="prose prose-invert prose-emerald max-w-none prose-p:leading-relaxed prose-pre:bg-slate-800/50 prose-pre:border prose-pre:border-slate-700/50">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+              <main className="flex-1 overflow-y-auto p-6 flex flex-col gap-6">
+                {messages.length === 0 && (
+                  <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-4">
+                    <div className="w-16 h-16 rounded-full bg-slate-800 flex items-center justify-center text-2xl animate-pulse shadow-[0_0_20px_rgba(52,211,153,0.1)]">
+                      🧠
                     </div>
-                  ) : (
-                    msg.content
-                  )}
-                </div>
-              </div>
-            ))}
-            
-            {isLoading && (
-              <div className="flex justify-start">
-                <div className="max-w-[75%] p-4 rounded-2xl bg-slate-800 text-slate-400 rounded-bl-sm border border-slate-700/50 flex items-center gap-2">
-                  <div className="w-2 h-2 bg-emerald-500/50 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                  <div className="w-2 h-2 bg-emerald-500/50 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                  <div className="w-2 h-2 bg-emerald-500/50 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
-                  <span className="ml-2 text-sm text-emerald-500/70">大腦檢索中...</span>
-                </div>
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-          </main>
+                    <p>準備好分享你的心情了嗎？</p>
+                  </div>
+                )}
 
-          <footer className="p-4 border-t border-slate-800 bg-slate-950">
-            <div className="flex gap-3 w-full relative">
-              <input 
-                type="text" 
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                disabled={isLoading}
-                placeholder="告訴我今天發生了什麼事..."
-                className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-5 py-3 focus:outline-none focus:ring-1 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all disabled:opacity-50"
-              />
-              <button 
-                onClick={handleSend}
-                disabled={isLoading || !input.trim()}
-                className="bg-emerald-600/90 hover:bg-emerald-500 text-white rounded-xl px-4 lg:px-6 py-3 font-medium transition-all transform active:scale-95 disabled:opacity-50 disabled:active:scale-100 shadow-[0_0_15px_rgba(52,211,153,0.15)] flex items-center justify-center"
-              >
-                發送
-              </button>
+                {messages.map((msg, i) => (
+                  <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[85%] lg:max-w-[75%] p-4 rounded-2xl leading-relaxed shadow-sm ${msg.role === 'user'
+                        ? 'bg-slate-700 text-slate-50 rounded-br-sm'
+                        : msg.role === 'error'
+                          ? 'bg-red-900/50 text-red-200 border border-red-800'
+                          : 'bg-slate-800 text-slate-200 rounded-bl-sm border border-slate-700/50 relative overflow-hidden'
+                      }`}>
+                      {msg.role === 'ai' && (
+                        <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500/50"></div>
+                      )}
+                      {msg.role === 'ai' ? (
+                        <div className="prose prose-invert prose-emerald max-w-none prose-p:leading-relaxed prose-pre:bg-slate-800/50 prose-pre:border prose-pre:border-slate-700/50">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                        </div>
+                      ) : (
+                        msg.content
+                      )}
+                    </div>
+                  </div>
+                ))}
+
+                {isLoading && (
+                  <div className="flex justify-start">
+                    <div className="max-w-[75%] p-4 rounded-2xl bg-slate-800 text-slate-400 rounded-bl-sm border border-slate-700/50 flex items-center gap-2">
+                      <div className="w-2 h-2 bg-emerald-500/50 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                      <div className="w-2 h-2 bg-emerald-500/50 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                      <div className="w-2 h-2 bg-emerald-500/50 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                      <span className="ml-2 text-sm text-emerald-500/70">大腦檢索中...</span>
+                    </div>
+                  </div>
+                )}
+                <div ref={messagesEndRef} />
+              </main>
+
+              <footer className="p-4 border-t border-slate-800 bg-slate-950">
+                <div className="flex gap-3 w-full relative">
+                  <input
+                    type="text"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                    disabled={isLoading}
+                    placeholder="告訴我今天發生了什麼事..."
+                    className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-5 py-3 focus:outline-none focus:ring-1 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all disabled:opacity-50"
+                  />
+                  <button
+                    onClick={handleSend}
+                    disabled={isLoading || !input.trim()}
+                    className="bg-emerald-600/90 hover:bg-emerald-500 text-white rounded-xl px-4 lg:px-6 py-3 font-medium transition-all transform active:scale-95 disabled:opacity-50 disabled:active:scale-100 shadow-[0_0_15px_rgba(52,211,153,0.15)] flex items-center justify-center"
+                  >
+                    發送
+                  </button>
+                </div>
+              </footer>
             </div>
-          </footer>
-        </div>
-        </>
+          </>
         )}
       </div>
 
@@ -428,14 +420,14 @@ function App() {
               <span>💾</span> 預覽並確認歸檔
             </h3>
             <p className="text-slate-400 mb-6 text-sm">AI 已自動將你們的對話切分為 {summarizedEvents.length} 個獨立事件。您可以自由修改內容再儲存。</p>
-            
+
             <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-6">
               {summarizedEvents.map((event, idx) => (
                 <div key={idx} className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-5 space-y-4">
                   <div className="flex flex-col sm:flex-row justify-between sm:items-center border-b border-slate-700 pb-3 gap-2">
                     <div className="flex items-center gap-3">
                       <h4 className="text-lg font-semibold text-emerald-400">事件 {idx + 1}</h4>
-                      <button 
+                      <button
                         onClick={() => {
                           if (window.confirm('確定要刪除這個事件嗎？')) {
                             setSummarizedEvents(summarizedEvents.filter((_, i) => i !== idx));
@@ -460,7 +452,7 @@ function App() {
                       }} className="bg-slate-900 border border-slate-700 rounded p-1.5 text-slate-200 text-sm focus:outline-none focus:border-emerald-500" />
                     </div>
                   </div>
-                  
+
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div className="col-span-2">
                       <label className="block text-xs font-medium text-slate-500 mb-1">主題 (Topic)</label>
@@ -479,7 +471,7 @@ function App() {
                       }} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-slate-200 focus:outline-none focus:border-emerald-500" />
                     </div>
                   </div>
-                  
+
                   <div>
                     <label className="block text-xs font-medium text-slate-500 mb-1">關鍵字 (用逗號分隔)</label>
                     <input type="text" value={event.keywords.join(', ')} onChange={(e) => {
@@ -526,10 +518,10 @@ function App() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            
+
             <div className="p-6 overflow-y-auto custom-scrollbar text-slate-300 text-sm leading-relaxed space-y-4">
               <p>我們極度重視您的個人隱私與資料安全。為了確保您的記憶與日記內容不被未經授權的第三方（包含資料庫管理員）窺探，我們採取了以下措施：</p>
-              
+
               <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 space-y-2">
                 <h4 className="font-bold text-emerald-400 flex items-center gap-2">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>

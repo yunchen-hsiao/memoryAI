@@ -34,6 +34,8 @@ def build_entities():
     memories = res.data or []
     for m in memories:
         m['summary'] = decrypt_text(m.get('summary', ''))
+        m['topic'] = decrypt_text(m.get('topic', ''))
+        m['keywords'] = [decrypt_text(k) for k in (m.get('keywords') or [])]
         
     if not memories:
         print("❌ 沒有找到任何記憶資料。")

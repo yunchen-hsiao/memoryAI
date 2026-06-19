@@ -66,7 +66,7 @@ export default function MemoryGraph({ token }: { token: string | null }) {
     if (node.x === undefined || node.y === undefined) return; // Prevent canvas crash before layout initializes
     
     const isEntity = node.group === 'entity';
-    const radius = isEntity ? Math.sqrt(node.val || 1) * 3 : 13; // Memory balls are now fixed radius 7
+    const radius = isEntity ? 15 + Math.sqrt(node.val || 1) * 3 : 6; // Entity: 基礎15+權重, Memory: 固定6
     
     let rgb = '';
     if (isEntity) {
@@ -114,8 +114,8 @@ export default function MemoryGraph({ token }: { token: string | null }) {
     if (start.x === undefined || end.x === undefined) return;
 
     // Calculate node visual boundaries. For entity, start outside the solid core.
-    const startR = start.group === 'entity' ? Math.sqrt(start.val || 1) * 3 + 5 : 7;
-    const endR = end.group === 'entity' ? Math.sqrt(end.val || 1) * 3 + 5 : 7;
+    const startR = start.group === 'entity' ? 15 + Math.sqrt(start.val || 1) * 3 + 5 : 6;
+    const endR = end.group === 'entity' ? 15 + Math.sqrt(end.val || 1) * 3 + 5 : 6;
 
     const dx = end.x - start.x;
     const dy = end.y - start.y;

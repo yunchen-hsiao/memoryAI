@@ -64,6 +64,8 @@ def get_dashboard_stats(current_user = Depends(get_current_user)):
         memories = response.data or []
         for m in memories:
             m['summary'] = decrypt_text(m.get('summary', ''))
+            m['topic'] = decrypt_text(m.get('topic', ''))
+            m['keywords'] = [decrypt_text(k) for k in (m.get('keywords') or [])]
         
         if not memories:
             return {
@@ -234,6 +236,7 @@ def chat(request: ChatRequest, current_user = Depends(get_current_user)):
             memory_context = "【系統擷取到的相關歷史記憶】\n"
             for mem in search_results.data:
                 mem['summary'] = decrypt_text(mem.get('summary', ''))
+                mem['topic'] = decrypt_text(mem.get('topic', ''))
                 time_str = f" {mem.get('diary_time', '')}" if mem.get('diary_time') else ""
                 memory_context += f"- 日期：{mem['diary_date']}{time_str} (主題：{mem['topic']})\n"
                 memory_context += f"  記憶細節：{mem['summary']}\n"
@@ -298,7 +301,11 @@ def get_dashboard_graph(current_user = Depends(get_current_user)):
     try:
         # 從 Supabase 撈出該使用者的所有人物關係與記憶
         response = supabase.table("memories").select("id, diary_date, emotion_score, topic, keywords, summary").eq("user_id", current_user.id).execute()
-        memories = response.data
+        memories = response.data or []
+        for m in memories:
+            m['summary'] = decrypt_text(m.get('summary', ''))
+            m['topic'] = decrypt_text(m.get('topic', ''))
+            m['keywords'] = [decrypt_text(k) for k in (m.get('keywords') or [])]
 
         if not memories:
             return {"nodes": [], "links": []}
@@ -408,6 +415,8 @@ def get_memories(current_user = Depends(get_current_user)):
         for m in response.data:
             m['summary'] = decrypt_text(m.get('summary', ''))
             m['content'] = decrypt_text(m.get('content', ''))
+            m['topic'] = decrypt_text(m.get('topic', ''))
+            m['keywords'] = [decrypt_text(k) for k in (m.get('keywords') or [])]
         return {"memories": response.data}
     except Exception as e:
         import traceback
@@ -436,6 +445,8 @@ def create_memory(memory: MemoryCreate, current_user = Depends(get_current_user)
         # 加密
         data['summary'] = encrypt_text(data.get('summary', ''), current_user.email)
         data['content'] = encrypt_text(data.get('content', ''), current_user.email)
+        data['topic'] = encrypt_text(data.get('topic', ''), current_user.email)
+        data['keywords'] = [encrypt_text(k, current_user.email) for k in data.get('keywords', [])]
         
         response = supabase.table("memories").insert(data).execute()
         return {"success": True, "data": response.data}
@@ -454,6 +465,8 @@ def update_memory(memory_id: str, memory: MemoryUpdate, current_user = Depends(g
         # 解密 old_data
         old_data['summary'] = decrypt_text(old_data.get('summary', ''))
         old_data['content'] = decrypt_text(old_data.get('content', ''))
+        old_data['topic'] = decrypt_text(old_data.get('topic', ''))
+        old_data['keywords'] = [decrypt_text(k) for k in (old_data.get('keywords') or [])]
         
         update_data = {k: v for k, v in memory.model_dump().items() if v is not None}
         if not update_data:
@@ -480,6 +493,10 @@ def update_memory(memory_id: str, memory: MemoryUpdate, current_user = Depends(g
             update_data['summary'] = encrypt_text(update_data['summary'], current_user.email)
         if 'content' in update_data:
             update_data['content'] = encrypt_text(update_data['content'], current_user.email)
+        if 'topic' in update_data:
+            update_data['topic'] = encrypt_text(update_data['topic'], current_user.email)
+        if 'keywords' in update_data:
+            update_data['keywords'] = [encrypt_text(k, current_user.email) for k in update_data['keywords']]
         
         response = supabase.table("memories").update(update_data).eq("id", memory_id).eq("user_id", current_user.id).execute()
         return {"success": True, "data": response.data}
@@ -615,9 +632,9 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
                 "user_id": current_user.id,
                 "diary_date": request.date_str,
                 "diary_time": event.get("diary_time"),
-                "topic": event.get("topic", ""),
+                "topic": encrypt_text(event.get("topic", ""), current_user.email),
                 "summary": encrypt_text(event.get("summary", ""), current_user.email),
-                "keywords": event.get("keywords", []),
+                "keywords": [encrypt_text(k, current_user.email) for k in event.get("keywords", [])],
                 "emotion_score": event.get("emotion_score", 50),
                 "importance_weight": event.get("importance_weight", 3),
                 "content": encrypt_text(event.get("content_chunk", ""), current_user.email),
