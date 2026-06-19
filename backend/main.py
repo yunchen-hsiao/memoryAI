@@ -124,7 +124,7 @@ def get_dashboard_stats(current_user = Depends(get_current_user)):
 
         # 深度分析前五大核心實體
         # 只過濾出已經被 AI 認定為「人類/實體」並編譯進 entities 資料表的關鍵字
-        entities_res = supabase.table("entities").select("name").execute()
+        entities_res = supabase.table("entities").select("name").eq("user_id", current_user.id).execute()
         valid_entity_names = {e["name"] for e in entities_res.data} if entities_res.data else set()
         
         top_keywords = [item["name"] for item in keyword_distribution if item["name"] in valid_entity_names][:5]

@@ -137,7 +137,7 @@ def parse_and_upload(file_path: str):
         
         # 檢查是否已經存在同一天的日記 (以天為單位檢查，避免重複呼叫 AI)
         try:
-            existing = supabase.table('memories').select('id').eq('diary_date', entry['date']).limit(1).execute()
+            existing = supabase.table('memories').select('id').eq('diary_date', entry['date']).eq('user_id', user_id).limit(1).execute()
             if existing.data and len(existing.data) > 0:
                 print(f"   => ⚠️ 發現 {entry['date']} 已經在資料庫中，已跳過整天不處理。")
                 print("-" * 50)
@@ -160,6 +160,7 @@ def parse_and_upload(file_path: str):
                 
                 # 準備寫入資料庫的格式
                 row = {
+                    "user_id": user_id,
                     "content": event.get("content_chunk", ""),
                     "summary": event.get("summary", ""),
                     "topic": event.get("topic", "未分類"),
