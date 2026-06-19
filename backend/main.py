@@ -612,12 +612,12 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
 
 
 @app.post("/api/entities/build")
-def trigger_build_entities():
+def trigger_build_entities(current_user = Depends(get_current_user)):
     import subprocess
     import sys
     try:
-        # 使用 sys.executable 確保背景執行時是使用當前 venv 的 python，而不是系統的 python
-        subprocess.Popen([sys.executable, "scripts/build_entities.py"])
+        # 使用 sys.executable 確保背景執行時是使用當前 venv 的 python
+        subprocess.Popen([sys.executable, "scripts/build_entities.py", str(current_user.id)])
         return {"success": True, "message": "已成功觸發核心人物檔案編譯！系統正在背景努力更新大腦中。"}
     except Exception as e:
         return {"error": str(e)}

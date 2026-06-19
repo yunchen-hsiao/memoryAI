@@ -17,11 +17,18 @@ if not supabase_url or not supabase_key:
 supabase: Client = create_client(supabase_url, supabase_key)
 client = genai.Client()
 
+import sys
+
 def build_entities():
-    print("🚀 開始執行「核心實體檔案編譯 (Entity Profiling)」...")
+    if len(sys.argv) < 2:
+        print("❌ 缺少 user_id 參數！")
+        return
+    user_id = sys.argv[1]
     
-    # 1. 抓取所有記憶
-    res = supabase.table("memories").select("id, summary, keywords, topic, diary_date").execute()
+    print(f"🚀 開始為用戶 {user_id} 執行「核心實體檔案編譯 (Entity Profiling)」...")
+    
+    # 1. 抓取使用者的所有記憶
+    res = supabase.table("memories").select("id, summary, keywords, topic, diary_date").eq("user_id", user_id).execute()
     memories = res.data
     
     if not memories:
@@ -97,7 +104,7 @@ def build_entities():
                     break
                 
                 # 5. 寫入資料庫 (先檢查是否已存在，存在則更新，不存在則新增)
-                existing = supabase.table("entities").select("id").eq("name", entity_name).execute()
+                existing = supabase.table("entities").select("id").eq("name", entity_name).eq("user_id", user_id).execute()
                 if existing.data and len(existing.data) > 0:
                     supabase.table("entities").update({
                         "description": profile["description"],
@@ -106,18 +113,22 @@ def build_entities():
                     print(f"   ✅ 已更新現有檔案。")
                 else:
                     supabase.table("entities").insert({
+                        "user_id": user_id,
                         "name": entity_name,
                         "description": profile["description"],
                         "relationship": profile["relationship"]
                     }).execute()
                     print(f"   ✨ 已建立全新檔案。")
+                
+                # 為了避免觸發 Gemini 免費版 15 RPM 的限制 (429 Too Many Requests)，每次成功後暫停 4.5 秒
+                time.sleep(4.5)
                 break # 成功就跳出 retry 迴圈
                     
             except Exception as e:
                 error_msg = str(e)
-                if "503" in error_msg and attempt < max_retries - 1:
-                    print(f"   ⏳ 遇到 503 錯誤，等待 5 秒後進行第 {attempt + 2} 次重試...")
-                    time.sleep(5)
+                if ("503" in error_msg or "429" in error_msg) and attempt < max_retries - 1:
+                    print(f"   ⏳ 遇到 API 速率限制 (429/503)，等待 10 秒後進行第 {attempt + 2} 次重試...")
+                    time.sleep(10)
                 else:
                     print(f"   ❌ 編譯 {entity_name} 失敗: {e}")
                     break
