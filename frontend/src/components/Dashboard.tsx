@@ -72,14 +72,14 @@ export default function Dashboard({ token }: DashboardProps) {
 
   return (
     <div className="h-full flex flex-col gap-6 p-6 overflow-y-auto">
-      <div className="flex justify-between items-center mb-2">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
         <div className="flex items-center gap-3">
-          <Brain className="w-8 h-8 text-emerald-400" />
+          <Brain className="w-8 h-8 text-emerald-400 shrink-0" />
           <h2 className="text-2xl font-bold bg-gradient-to-r from-emerald-400 to-teal-500 bg-clip-text text-transparent">大腦記憶儀表板</h2>
         </div>
         <button 
           onClick={handleBuildEntities}
-          className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded-lg border border-amber-500/30 transition-colors shadow-[0_0_10px_rgba(251,191,36,0.1)] text-sm font-medium"
+          className="w-full sm:w-auto flex justify-center items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded-lg border border-amber-500/30 transition-colors shadow-[0_0_10px_rgba(251,191,36,0.1)] text-sm font-medium"
         >
           <span>⚡</span> 重新編譯核心人物網
         </button>
