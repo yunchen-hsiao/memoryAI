@@ -66,7 +66,7 @@ export default function MemoryGraph({ token }: { token: string | null }) {
     if (node.x === undefined || node.y === undefined) return; // Prevent canvas crash before layout initializes
     
     const isEntity = node.group === 'entity';
-    const radius = isEntity ? 15 + Math.sqrt(node.val || 1) * 3 : 15; // Entity: 基礎15+權重, Memory: 固定6
+    const radius = isEntity ? 15 + Math.sqrt(node.val || 1) * 3 : 10; // Entity: 基礎15+權重, Memory: 固定6
     
     let rgb = '';
     if (isEntity) {
