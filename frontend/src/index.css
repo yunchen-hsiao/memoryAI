@@ -1,2 +1,112 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
+
+/* =====================================================
+   莫蘭迪冷調設計系統 — Morandi Cool Tone Design Tokens
+   ===================================================== */
+
+/* Tailwind v4 @theme block — 擴充自訂色階 */
+@theme {
+  /* 深色模式預設色階 */
+  --color-m-base: #1e2228;
+  --color-m-panel: #262d35;
+  --color-m-panel-alt: #2e3640;
+  --color-m-border: #374049;
+  --color-m-hover: #323d48;
+  --color-m-accent1: #7f94a8;
+  --color-m-accent2: #7a9490;
+  --color-m-accent3: #8e8fb0;
+  --color-m-text: #dde3ec;
+  --color-m-muted: #8a9099;
+  --color-m-user-bubble: #2c3a46;
+  --color-m-ai-bubble: #222d30;
+  --color-m-header: #191e24;
+
+  /* 漸層起點終點 */
+  --color-grad-from: #7f94a8;
+  --color-grad-to: #7a9490;
+}
+
+/* =====================================================
+   亮色模式覆寫
+   ===================================================== */
+.light {
+  --color-m-base: #eceef2;
+  --color-m-panel: #f5f6f9;
+  --color-m-panel-alt: #e9ecf1;
+  --color-m-border: #ced3dc;
+  --color-m-hover: #e4e7ed;
+  --color-m-accent1: #5c7a93;
+  --color-m-accent2: #5a7b76;
+  --color-m-accent3: #6e6f90;
+  --color-m-text: #3a4049;
+  --color-m-muted: #6e7580;
+  --color-m-user-bubble: #dce5ed;
+  --color-m-ai-bubble: #dfe8e4;
+  --color-m-header: #e2e5eb;
+
+  --color-grad-from: #5c7a93;
+  --color-grad-to: #5a7b76;
+}
+
+/* =====================================================
+   Typography 與全域 reset
+   ===================================================== */
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background-color: var(--color-m-base);
+  color: var(--color-m-text);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* =====================================================
+   漸層文字 utility
+   ===================================================== */
+.text-morandi-gradient {
+  background: linear-gradient(135deg, var(--color-grad-from), var(--color-grad-to));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* =====================================================
+   Custom scrollbar — 莫蘭迪風格
+   ===================================================== */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: var(--color-m-border);
+  border-radius: 999px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-m-accent1);
+}
+
+/* =====================================================
+   漸層 SVG icon 通用定義
+   ===================================================== */
+.icon-gradient-fill {
+  fill: url(#morandi-grad);
+}
+
+/* Theme 切換動畫 */
+* {
+  transition-property: background-color, border-color, color;
+  transition-duration: 200ms;
+  transition-timing-function: ease;
+}
+
+/* 防止 transition 影響 transform 效能 */
+button, a, [class*="animate-"] {
+  transition-property: background-color, border-color, color, opacity, transform, box-shadow;
+}
