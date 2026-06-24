@@ -8,46 +8,46 @@
 
 /* Tailwind v4 @theme block — 擴充自訂色階 */
 @theme {
-  /* 深色模式預設色階 */
-  --color-m-base: #1e2228;
-  --color-m-panel: #262d35;
-  --color-m-panel-alt: #2e3640;
-  --color-m-border: #374049;
-  --color-m-hover: #323d48;
-  --color-m-accent1: #7f94a8;
-  --color-m-accent2: #7a9490;
-  --color-m-accent3: #8e8fb0;
-  --color-m-text: #dde3ec;
-  --color-m-muted: #8a9099;
-  --color-m-user-bubble: #2c3a46;
-  --color-m-ai-bubble: #222d30;
-  --color-m-header: #191e24;
+  /* 深色模式預設色階 (調整提升飽和度) */
+  --color-m-base: #1a1e24;
+  --color-m-panel: #232931;
+  --color-m-panel-alt: #2b333d;
+  --color-m-border: #353e49;
+  --color-m-hover: #2f3844;
+  --color-m-accent1: #648db8;
+  --color-m-accent2: #5cb3a1;
+  --color-m-accent3: #8a88cc;
+  --color-m-text: #e2e8f0;
+  --color-m-muted: #94a3b8;
+  --color-m-user-bubble: #273847;
+  --color-m-ai-bubble: #1f2d33;
+  --color-m-header: #151a1f;
 
   /* 漸層起點終點 */
-  --color-grad-from: #7f94a8;
-  --color-grad-to: #7a9490;
+  --color-grad-from: #648db8;
+  --color-grad-to: #5cb3a1;
 }
 
 /* =====================================================
    亮色模式覆寫
    ===================================================== */
 .light {
-  --color-m-base: #eceef2;
-  --color-m-panel: #f5f6f9;
-  --color-m-panel-alt: #e9ecf1;
-  --color-m-border: #ced3dc;
-  --color-m-hover: #e4e7ed;
-  --color-m-accent1: #5c7a93;
-  --color-m-accent2: #5a7b76;
-  --color-m-accent3: #6e6f90;
-  --color-m-text: #3a4049;
-  --color-m-muted: #6e7580;
-  --color-m-user-bubble: #dce5ed;
-  --color-m-ai-bubble: #dfe8e4;
-  --color-m-header: #e2e5eb;
+  --color-m-base: #f0f4f8;
+  --color-m-panel: #ffffff;
+  --color-m-panel-alt: #f1f5f9;
+  --color-m-border: #cbd5e1;
+  --color-m-hover: #e2e8f0;
+  --color-m-accent1: #4784b8;
+  --color-m-accent2: #38a38c;
+  --color-m-accent3: #7574ab;
+  --color-m-text: #334155;
+  --color-m-muted: #64748b;
+  --color-m-user-bubble: #e2eaf2;
+  --color-m-ai-bubble: #dcf0eb;
+  --color-m-header: #ffffff;
 
-  --color-grad-from: #5c7a93;
-  --color-grad-to: #5a7b76;
+  --color-grad-from: #4784b8;
+  --color-grad-to: #38a38c;
 }
 
 /* =====================================================

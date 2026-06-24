@@ -24,7 +24,7 @@ interface SummarizedEvent {
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 function App() {
-  const [activeTab, setActiveTab] = useState<'chat' | 'dashboard' | 'timeline' | 'import'>('chat')
+  const [activeTab, setActiveTab] = useState<'chat' | 'dashboard' | 'timeline' | 'import'>('dashboard')
   const [healthStatus, setHealthStatus] = useState<string>('Checking backend...')
   const [messages, setMessages] = useState<{ role: string, content: string }[]>([])
   const [input, setInput] = useState('')
@@ -230,9 +230,6 @@ function App() {
 
           {/* Desktop Nav */}
           <nav className="hidden lg:flex items-center p-1 rounded-lg gap-1" style={{ backgroundColor: 'var(--color-m-panel)', border: '1px solid var(--color-m-border)' }}>
-            <button onClick={() => setActiveTab('chat')} className={navBtnClass('chat')} style={activeTab === 'chat' ? s.navActive : s.navInactive}>
-              <BrainIcon size={16} /> 記憶對話
-            </button>
             <button onClick={() => setActiveTab('dashboard')} className={navBtnClass('dashboard')} style={activeTab === 'dashboard' ? s.navActive : s.navInactive}>
               <DashboardIcon size={16} /> 大腦儀表板
             </button>
