@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, Edit2, Trash2, Calendar, Hash, Activity, Plus } from 'lucide-react';
+import { Search, Edit2, Trash2, Calendar, Hash, Activity, Plus, FileText } from 'lucide-react';
 
 interface Memory {
   id: string;
@@ -9,7 +9,7 @@ interface Memory {
   summary: string;
   emotion_score: number;
   keywords: string[];
-  original_text: string;
+  content?: string;
 }
 
 interface MemoryTimelineProps {
@@ -113,7 +113,7 @@ export default function MemoryTimeline({ token }: MemoryTimelineProps) {
       summary: '',
       emotion_score: 50,
       keywords: [],
-      original_text: ''
+      content: ''
     });
     setIsEditModalOpen(true);
   };
@@ -217,6 +217,15 @@ export default function MemoryTimeline({ token }: MemoryTimelineProps) {
                   
                   <p className="text-slate-300 leading-relaxed mb-4">{memory.summary}</p>
                   
+                  {memory.content && (
+                    <div className="mb-4 p-4 bg-slate-900/80 rounded-xl border border-slate-700/50">
+                      <div className="text-xs text-slate-500 mb-2 font-medium flex items-center gap-1.5">
+                        <FileText className="w-3.5 h-3.5" /> 原始日記紀錄
+                      </div>
+                      <p className="text-slate-400 text-sm leading-relaxed whitespace-pre-wrap">{memory.content}</p>
+                    </div>
+                  )}
+                  
                   <div className="flex flex-wrap gap-2">
                     {(memory.keywords || []).map((kw, idx) => (
                       <span key={idx} className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-md bg-slate-700/30 text-slate-300 border border-slate-600/30">
@@ -272,7 +281,7 @@ export default function MemoryTimeline({ token }: MemoryTimelineProps) {
               
               <div>
                 <label className="block text-sm font-medium text-slate-400 mb-1">原始日記文本</label>
-                <textarea value={editingMemory.original_text || ''} onChange={e => setEditingMemory({...editingMemory, original_text: e.target.value})} className="w-full h-32 bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-blue-500 resize-none custom-scrollbar" placeholder="如果需要，請貼上原始的日記..." />
+                <textarea value={editingMemory.content || ''} onChange={e => setEditingMemory({...editingMemory, content: e.target.value})} className="w-full h-32 bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-blue-500 resize-none custom-scrollbar" placeholder="如果需要，請貼上原始的日記..." />
               </div>
             </div>
 
