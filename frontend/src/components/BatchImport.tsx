@@ -99,63 +99,62 @@ export default function BatchImport({ token }: BatchImportProps) {
 
   return (
     <div className="w-full max-w-4xl mx-auto py-8 px-4 sm:px-6">
-      <div className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 sm:p-8 shadow-xl">
+      <div className="rounded-2xl p-6 sm:p-8 shadow-xl" style={{ backgroundColor: 'var(--color-m-panel)', border: '1px solid var(--color-m-border)' }}>
         <div className="flex items-center gap-3 mb-6">
-          <div className="p-3 bg-emerald-500/20 rounded-xl">
-            <UploadCloud className="w-6 h-6 text-emerald-400" />
+          <div className="p-3 rounded-xl" style={{ backgroundColor: 'rgba(92,179,161,0.15)' }}>
+            <UploadCloud className="w-6 h-6" style={{ color: 'var(--color-m-accent2)' }} />
           </div>
           <div>
-            <h2 className="text-xl sm:text-2xl font-bold text-slate-100">大量匯入記憶</h2>
-            <p className="text-sm text-slate-400 mt-1">
+            <h2 className="text-xl sm:text-2xl font-bold" style={{ color: 'var(--color-m-text)' }}>大量匯入記憶</h2>
+            <p className="text-sm mt-1" style={{ color: 'var(--color-m-muted)' }}>
               將你的歷史日記貼在下方。系統會自動根據日期進行切割，並使用 AI 萃取事件與情緒。
             </p>
           </div>
         </div>
 
-        <div className="mb-6 bg-slate-900/50 rounded-xl p-4 border border-slate-700/50 text-sm text-slate-300">
-          <p className="font-medium text-slate-200 mb-2">📋 格式要求：</p>
+        <div className="mb-6 rounded-xl p-4 text-sm" style={{ backgroundColor: 'var(--color-m-panel-alt)', border: '1px solid var(--color-m-border)', color: 'var(--color-m-muted)' }}>
+          <p className="font-medium mb-2" style={{ color: 'var(--color-m-text)' }}>📋 格式要求：</p>
           <ul className="list-disc list-inside space-y-1 ml-2">
-            <li>日期必須單獨佔一行，格式為 <code className="bg-slate-800 px-1.5 py-0.5 rounded text-emerald-400">YYYY-MM-DD</code> 或 <code className="bg-slate-800 px-1.5 py-0.5 rounded text-emerald-400">YYYY/MM/DD</code></li>
+            <li>日期必須單獨佔一行，格式為 <code className="px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--color-m-panel)', color: 'var(--color-m-accent2)', border: '1px solid var(--color-m-border)' }}>YYYY-MM-DD</code> 或 <code className="px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--color-m-panel)', color: 'var(--color-m-accent2)', border: '1px solid var(--color-m-border)' }}>YYYY/MM/DD</code></li>
             <li>日期下方接著寫該天的日記內容</li>
             <li>系統會自動將下一個日期標記視為隔天日記的開始</li>
           </ul>
         </div>
 
-        <textarea
+        <textarea 
           value={text}
           onChange={(e) => setText(e.target.value)}
-          disabled={isProcessing}
-          className="w-full h-64 sm:h-96 bg-slate-900 border border-slate-700 rounded-xl p-4 text-slate-200 font-mono text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/50 transition-all custom-scrollbar resize-y mb-6 disabled:opacity-50"
           placeholder={`2026-06-18\n今天開了專題的會，進度滿順利的。\n\n2026-06-19\n好累的一天，都在寫程式，沒時間吃飯。`}
+          className="w-full h-96 rounded-xl p-4 focus:outline-none resize-none mb-6 custom-scrollbar font-mono text-sm"
+          style={{ backgroundColor: 'var(--color-m-base)', border: '1px solid var(--color-m-border)', color: 'var(--color-m-text)' }}
+          disabled={isProcessing}
         />
 
         {status !== 'idle' && (
-          <div className={`p-4 rounded-xl border mb-6 flex flex-col gap-3 ${
-            status === 'error' ? 'bg-rose-500/10 border-rose-500/30 text-rose-400' :
-            status === 'success' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' :
-            'bg-blue-500/10 border-blue-500/30 text-blue-400'
-          }`}>
-            <div className="flex items-center gap-3">
-              {status === 'error' && <AlertCircle className="w-5 h-5 shrink-0" />}
-              {status === 'success' && <CheckCircle className="w-5 h-5 shrink-0" />}
-              {status === 'processing' && <RefreshCw className="w-5 h-5 shrink-0 animate-spin" />}
-              <span className="font-medium">{message}</span>
-            </div>
+          <div className={`mb-6 p-4 rounded-xl flex items-start gap-3`} style={{ 
+            backgroundColor: status === 'error' ? 'rgba(192,100,100,0.15)' : 'var(--color-m-panel-alt)',
+            border: '1px solid',
+            borderColor: status === 'error' ? 'rgba(192,100,100,0.3)' : 'var(--color-m-border)',
+            color: status === 'error' ? '#c08080' : 'var(--color-m-text)'
+          }}>
+            {status === 'processing' && <RefreshCw className="w-5 h-5 animate-spin mt-0.5" style={{ color: 'var(--color-m-accent1)' }} />}
+            {status === 'success' && <CheckCircle className="w-5 h-5 mt-0.5" style={{ color: 'var(--color-m-accent2)' }} />}
+            {status === 'error' && <AlertCircle className="w-5 h-5 mt-0.5" />}
             
-            {status === 'processing' && progress.total > 0 && (
-              <div className="space-y-1.5">
-                <div className="flex justify-between text-xs font-medium">
-                  <span>進度: {progress.current} / {progress.total} 天</span>
-                  <span>{Math.round((progress.current / progress.total) * 100)}%</span>
+            <div className="flex-1">
+              <p className="font-medium">{message}</p>
+              {status === 'processing' && (
+                <div className="mt-3">
+                  <div className="w-full h-2 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--color-m-base)' }}>
+                    <div 
+                      className="h-full transition-all duration-300" 
+                      style={{ width: `${(progress.current / progress.total) * 100}%`, background: 'linear-gradient(90deg, var(--color-m-accent1), var(--color-m-accent2))' }}
+                    ></div>
+                  </div>
+                  <p className="text-xs mt-1 text-right" style={{ color: 'var(--color-m-muted)' }}>{progress.current} / {progress.total}</p>
                 </div>
-                <div className="w-full h-2 bg-slate-900 rounded-full overflow-hidden">
-                  <div 
-                    className="h-full bg-blue-500 transition-all duration-300"
-                    style={{ width: `${(progress.current / progress.total) * 100}%` }}
-                  ></div>
-                </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         )}
 

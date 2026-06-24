@@ -153,7 +153,7 @@ export default function MemoryGraph({ token }: { token: string | null }) {
   }, [data]);
 
   return (
-    <div ref={containerRef} className="w-full h-full bg-slate-900/40 rounded-2xl border border-slate-700/50 shadow-inner overflow-hidden relative">
+    <div ref={containerRef} className="w-full h-full rounded-2xl shadow-inner overflow-hidden relative" style={{ backgroundColor: '#1a1e24', border: '1px solid #353e49' }}>
       {!data.nodes || data.nodes.length === 0 ? (
         <div className="absolute inset-0 flex items-center justify-center text-slate-500">
           <p>等待星系資料... (若持續未顯示，請確認後端是否已重新啟動)</p>
@@ -183,33 +183,34 @@ export default function MemoryGraph({ token }: { token: string | null }) {
       )}
       
       {/* Legend */}
-      <div className="absolute bottom-4 left-4 bg-slate-900/80 backdrop-blur-md p-3 rounded-xl border border-slate-700/50 flex flex-col gap-2 text-xs">
+      <div className="absolute bottom-4 left-4 backdrop-blur-md p-3 rounded-xl flex flex-col gap-2 text-xs" style={{ backgroundColor: 'rgba(35, 41, 49, 0.8)', border: '1px solid #353e49' }}>
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded-full bg-slate-50 shadow-[0_0_12px_rgba(248,250,252,1)]"></div>
-          <span className="text-slate-300">核心人物 / 事物</span>
+          <span style={{ color: '#e2e8f0' }}>核心人物 / 事物</span>
         </div>
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded-full bg-blue-400 opacity-80"></div>
-          <span className="text-slate-400">正向記憶</span>
+          <span style={{ color: '#94a3b8' }}>正向記憶</span>
         </div>
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded-full bg-rose-500 opacity-80"></div>
-          <span className="text-slate-400">負向記憶</span>
+          <span style={{ color: '#94a3b8' }}>負向記憶</span>
         </div>
       </div>
 
       {/* Selected Memory Detail Card */}
       {selectedMemory && (
-        <div className="absolute top-4 right-4 w-80 bg-slate-800/95 backdrop-blur-md p-5 rounded-xl border border-slate-600/50 shadow-2xl z-10 animate-in fade-in slide-in-from-top-4 duration-300">
+        <div className="absolute top-4 right-4 w-80 backdrop-blur-md p-5 rounded-xl shadow-2xl z-10 animate-in fade-in slide-in-from-top-4 duration-300" style={{ backgroundColor: 'rgba(35, 41, 49, 0.95)', border: '1px solid #353e49' }}>
           <button 
             onClick={() => setSelectedMemory(null)}
-            className="absolute top-3 right-3 text-slate-400 hover:text-white transition-colors"
+            className="absolute top-3 right-3 hover:text-white transition-colors"
+            style={{ color: '#94a3b8' }}
           >
             <X className="w-5 h-5" />
           </button>
-          <h4 className="text-emerald-400 font-semibold mb-1 text-sm">{selectedMemory.name.split(' ')[0]}</h4>
-          <h3 className="text-slate-100 font-bold mb-3 text-lg leading-tight">{selectedMemory.name.substring(11)}</h3>
-          <p className="text-slate-300 text-sm leading-relaxed max-h-60 overflow-y-auto pr-2">
+          <h4 className="font-semibold mb-1 text-sm" style={{ color: '#5cb3a1' }}>{selectedMemory.name.split(' ')[0]}</h4>
+          <h3 className="font-bold mb-3 text-lg leading-tight" style={{ color: '#e2e8f0' }}>{selectedMemory.name.substring(11)}</h3>
+          <p className="text-sm leading-relaxed max-h-60 overflow-y-auto pr-2" style={{ color: '#94a3b8' }}>
             {selectedMemory.summary || "目前沒有這段記憶的詳細摘要。"}
           </p>
         </div>

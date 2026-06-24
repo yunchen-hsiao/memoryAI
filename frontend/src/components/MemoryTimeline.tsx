@@ -122,9 +122,9 @@ export default function MemoryTimeline({ token }: MemoryTimelineProps) {
   const filteredMemories = memories.filter(m => {
     const q = searchQuery.toLowerCase();
     return (
-      (m.topic || '').toLowerCase().includes(q) ||
-      (m.summary || '').toLowerCase().includes(q) ||
-      (m.keywords || []).some(k => k.toLowerCase().includes(q))
+      (m.topic ? String(m.topic).toLowerCase() : '').includes(q) ||
+      (m.summary ? String(m.summary).toLowerCase() : '').includes(q) ||
+      (m.keywords || []).some(k => k && typeof k === 'string' && k.toLowerCase().includes(q))
     );
   }).sort((a, b) => {
     const timeA = a.diary_time || '00:00:00';
