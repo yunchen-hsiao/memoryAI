@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import Dashboard from './components/Dashboard'
 import MemoryTimeline from './components/MemoryTimeline'
-import { MessageSquare, LayoutDashboard, History, Trash2, Menu, X, LogOut, UploadCloud, ShieldCheck } from 'lucide-react'
+import { MessageSquare, LayoutDashboard, History, Trash2, Menu, X, LogOut, UploadCloud, ShieldCheck, AlertCircle } from 'lucide-react'
 import AuthScreen from './components/AuthScreen'
 import BatchImport from './components/BatchImport'
 import { supabase } from './supabase'
@@ -390,14 +390,19 @@ function App() {
 
               <footer className="p-4 border-t border-slate-800 bg-slate-950">
                 <div className="flex gap-3 w-full relative">
-                  <input
-                    type="text"
+                  <textarea
+                    rows={5}
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSend();
+                      }
+                    }}
                     disabled={isLoading}
-                    placeholder="告訴我今天發生了什麼事..."
-                    className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-5 py-3 focus:outline-none focus:ring-1 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all disabled:opacity-50"
+                    placeholder="告訴我今天發生了什麼事... (按 Enter 發送，Shift+Enter 換行)"
+                    className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-5 py-3 focus:outline-none focus:ring-1 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all disabled:opacity-50 resize-none custom-scrollbar"
                   />
                   <button
                     onClick={handleSend}
@@ -544,6 +549,36 @@ function App() {
             <div className="px-6 py-4 border-t border-slate-800 flex justify-end bg-slate-900">
               <button onClick={() => setShowPrivacyModal(false)} className="px-5 py-2 text-slate-900 bg-emerald-500 hover:bg-emerald-400 font-bold rounded-xl transition-colors shadow-[0_0_15px_rgba(52,211,153,0.3)]">
                 我了解了
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Backend Offline Modal */}
+      {healthStatus === 'Backend is offline' && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-[70]">
+          <div className="bg-slate-900 border border-rose-500/30 rounded-2xl w-full max-w-sm sm:max-w-md shadow-[0_0_40px_rgba(225,29,72,0.1)] overflow-hidden flex flex-col">
+            <div className="px-6 py-4 border-b border-slate-800 flex items-center gap-3 bg-rose-500/10">
+              <div className="p-2 bg-rose-500/20 rounded-full">
+                <AlertCircle className="w-6 h-6 text-rose-500" />
+              </div>
+              <h3 className="text-lg font-bold text-slate-200">
+                大腦核心連線中斷
+              </h3>
+            </div>
+
+            <div className="p-6 text-slate-300 text-sm leading-relaxed space-y-4">
+              <p>我們暫時無法連線至後端伺服器 (Backend Offline)。</p>
+              <p>伺服器可能因為閒置過久而進入了自動休眠狀態，或者正在重新啟動中。</p>
+              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700">
+                <p className="text-emerald-400 font-medium mb-1">💡 解決方式：</p>
+                <p className="text-slate-400">目前無法寫入或檢索記憶。請聯絡系統管理員為您喚醒伺服器或進行除錯，以恢復正常功能。</p>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-slate-800 flex justify-end bg-slate-950">
+              <button onClick={() => setHealthStatus('Dismissed')} className="px-5 py-2 text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 font-medium rounded-xl transition-colors">
+                我知道了
               </button>
             </div>
           </div>

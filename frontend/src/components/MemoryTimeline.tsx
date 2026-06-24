@@ -175,7 +175,7 @@ export default function MemoryTimeline({ token }: MemoryTimelineProps) {
           filteredMemories.map(memory => (
             <div key={memory.id} className="group relative bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 hover:bg-slate-800/60 transition-all hover:border-slate-600 shadow-sm hover:shadow-xl">
               {/* Action Buttons */}
-              <div className="absolute top-4 right-4 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="absolute top-4 right-4 flex items-center gap-2 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity z-10">
                 <button 
                   onClick={() => { setEditingMemory(memory); setIsEditModalOpen(true); }}
                   className="p-2 bg-slate-700/50 hover:bg-blue-500/20 hover:text-blue-400 text-slate-300 rounded-lg transition-colors"
