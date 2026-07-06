@@ -8,6 +8,13 @@ create table public.profiles (
   created_at timestamp with time zone default timezone('utc'::text, now())
 );
 
+-- Create user_contexts table for rolling narrative
+create table user_contexts (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  life_context text default '這是一段全新的人生故事紀錄，目前還沒有任何前情提要。',
+  updated_at timestamp with time zone default timezone('utc'::text, now())
+);
+
 -- Create memories table
 create table memories (
   id uuid primary key default gen_random_uuid(),
@@ -21,6 +28,7 @@ create table memories (
   embedding vector(3072), -- Gemini text-embedding-004 has 768 dimensions
   diary_date date, -- The actual date the event happened
   diary_time time NULL, -- The actual time the event happened
+  timezone text NULL, -- e.g., 'Asia/Taipei', 'Pacific/Auckland'
   created_at timestamp with time zone default timezone('utc'::text, now())
 );
 
@@ -48,6 +56,7 @@ returns table (
   topic text,
   diary_date date,
   diary_time time,
+  timezone text,
   similarity float,
   final_score float
 )
@@ -61,6 +70,7 @@ begin
     memories.topic,
     memories.diary_date,
     memories.diary_time,
+    memories.timezone,
     (1 - (memories.embedding <=> query_embedding)) as similarity,
     -- Hybrid score calculation:
     -- Base similarity + time decay factor

@@ -387,6 +387,7 @@ from typing import Optional, List
 class MemoryUpdate(BaseModel):
     diary_date: Optional[str] = None
     diary_time: Optional[str] = None
+    timezone: Optional[str] = None
     topic: Optional[str] = None
     summary: Optional[str] = None
     emotion_score: Optional[int] = None
@@ -396,6 +397,7 @@ class MemoryUpdate(BaseModel):
 class MemoryCreate(BaseModel):
     diary_date: str
     diary_time: Optional[str] = None
+    timezone: Optional[str] = None
     topic: str
     summary: str
     emotion_score: int
@@ -417,6 +419,7 @@ def get_memories(current_user = Depends(get_current_user)):
             m['content'] = decrypt_text(m.get('content', ''))
             m['topic'] = decrypt_text(m.get('topic', ''))
             m['keywords'] = [decrypt_text(k) for k in (m.get('keywords') or [])]
+            m['timezone'] = m.get('timezone') or 'Asia/Taipei'
         return {"memories": response.data}
     except Exception as e:
         import traceback
@@ -504,7 +507,7 @@ def update_memory(memory_id: str, memory: MemoryUpdate, current_user = Depends(g
         return {"error": str(e)}
 
 @app.post("/api/chat/summarize")
-def summarize_chat(request: ChatRequest):
+def summarize_chat(request: ChatRequest, current_user = Depends(get_current_user)):
     try:
         current_date = datetime.datetime.now().strftime("%Y-%m-%d")
         current_time = datetime.datetime.now().strftime("%H:%M")
@@ -513,28 +516,35 @@ def summarize_chat(request: ChatRequest):
         for msg in request.history:
             role = "AI" if msg['role'] == 'ai' or msg['role'] == 'model' else "我"
             chat_text += f"{role}: {msg['content']}\n"
-            
-        # 加上最後一句話
         chat_text += f"我: {request.message}\n"
 
+        # 讀取前情提要
+        life_context = get_user_context(current_user.id)
+
         prompt = f"""
-        你是一個記憶萃取專家。以下是使用者與 AI 的最新一段對話紀錄。
-        請你分析這段對話，判斷這段對話中是否有值得被「記憶」或「歸檔」的資訊。
-        請判斷這段對話包含了「幾個獨立的事件或主題」。
+        你是一個記憶萃取專家，正在閱讀一部連續的個人日記。
         
-        請將每個獨立事件切割出來，提取豐富細節，並輸出為純 JSON 陣列 (Array) 格式（不要包含 ```json 等 Markdown 標記，直接回傳 [ 開始的字串）：
+        【前情提要 — 截至目前為止的人生背景】
+        {life_context}
+        
+        以下是使用者與 AI 的最新一段對話紀錄。
+        請根據前情提要分析這段對話，判斷包含了「幾個獨立的事件或主題」。
+        請將每個獨立事件切割出來，並輸出為純 JSON 陣列 (Array) 格式（不要包含 ```json 標記）：
         [
             {{
-                "summary": "一段約50字的精要總結（請統一使用第一人稱「我」來代表使用者）",
-                "topic": "這個事件的主要標籤（簡短名詞），例如：感情、專題討論、閒聊",
-                "keywords": ["關鍵字1", "關鍵字2", "具體人事物"],
+                "summary": "一段約60字的精要總結（請統一使用第一人稱「我」，如有跨事件關聯請自然提及）",
+                "topic": "這個事件的主要標籤（簡短名詞）",
+                "keywords": ["具體人名", "地名", "獨特物件"],
                 "emotion_score": 0到100的整數 (0是最負面悲傷，100是最快樂正面，50是平靜),
-                "importance_weight": 1到5的整數 (1是最不重要，5是對人生影響重大),
+                "importance_weight": 1到5的整數,
                 "content_chunk": "與這個事件相關的對話重點或原汁原味的金句紀錄",
                 "diary_date": "{current_date}",
-                "diary_time": "{current_time}"
+                "diary_time": "{current_time}",
+                "timezone": "標準時區字串，例如 Pacific/Auckland，若未提及則填 Asia/Taipei"
             }}
         ]
+        最後，請在陣列的最後加上一個特殊物件：
+        {{ "__context_update__": "根據今天發生的所有事情，請用繁體中文更新並補充「前情提要」。保持在300字以內，重點保留重要人物的現況、未完結的事件進展、使用者目前的情緒狀態與重要計畫。" }}
         
         對話紀錄：
         {chat_text}
@@ -552,8 +562,18 @@ def summarize_chat(request: ChatRequest):
                     )
                 )
                 
-                events = json.loads(response.text)
-                return {"success": True, "events": events}
+                all_items = json.loads(response.text)
+                # 將 context_update 與實際事件分開回傳
+                context_update = None
+                real_events = []
+                for item in all_items:
+                    if "__context_update__" in item:
+                        context_update = item["__context_update__"]
+                    else:
+                        real_events.append(item)
+                if context_update:
+                    update_user_context(current_user.id, context_update)
+                return {"success": True, "events": real_events}
             except Exception as e:
                 if "503" in str(e) and attempt < max_retries - 1:
                     print(f"Summarize API 503 Error. Retrying in 3 seconds... (Attempt {attempt + 1}/{max_retries})")
@@ -565,6 +585,50 @@ def summarize_chat(request: ChatRequest):
         traceback.print_exc()
         return {"error": str(e)}
 
+@app.get("/api/memories/monthly_summary")
+def monthly_summary(year: int, month: int, current_user = Depends(get_current_user)):
+    """For the Dashboard: generate a narrative story summary for a given month."""
+    try:
+        # 查詢該月的所有記憶
+        date_from = f"{year:04d}-{month:02d}-01"
+        date_to = f"{year:04d}-{month:02d}-31"
+        res = supabase.table("memories") \
+            .select("summary, topic, diary_date, diary_time, keywords, emotion_score") \
+            .eq("user_id", current_user.id) \
+            .gte("diary_date", date_from) \
+            .lte("diary_date", date_to) \
+            .order("diary_date").execute()
+        
+        if not res.data:
+            return {"success": True, "summary": None, "message": "這個月份還沒有任何記憶。"}
+
+        # 解密直接用於 Prompt
+        memory_lines = []
+        for m in res.data:
+            s = decrypt_text(m.get('summary', ''))
+            t = decrypt_text(m.get('topic', ''))
+            memory_lines.append(f"[{m['diary_date']}] {t}: {s}")
+
+        memories_text = "\n".join(memory_lines)
+        prompt = f"""
+        以下是一位使用者在 {year}年{month}月的所有記憶片段：
+
+        {memories_text}
+
+        請用温暨、帶點文學性的文字，以第一人稱「我」，將這個月的所有事情織成一篇「本月處生故事小結」。
+        - 請突題重要的人物互動、情感線索、有趣的小事、或重要的皮處。
+        - 如果有明顯的故事線索（如感情線、專案進展），請自然地織入。
+        - 長度約 200-400 字，請用繁體中文寫作。
+        - 直接回傳純文字內容，不要加標題。
+        """
+
+        response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
+        return {"success": True, "summary": response.text.strip(), "memory_count": len(res.data)}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
+
 @app.delete("/api/memories/{memory_id}")
 def delete_memory(memory_id: str, current_user = Depends(get_current_user)):
     try:
@@ -572,6 +636,29 @@ def delete_memory(memory_id: str, current_user = Depends(get_current_user)):
         return {"success": True}
     except Exception as e:
         return {"error": str(e)}
+
+
+# --- 全局脈絡 (Global Rolling Context) Helpers ---
+def get_user_context(user_id: str) -> str:
+    """從資料庫取得使用者目前的人生背景前情提要"""
+    try:
+        res = supabase.table("user_contexts").select("life_context").eq("user_id", user_id).limit(1).execute()
+        if res.data:
+            return res.data[0].get("life_context", "這是一段全新的人生故事紀錄，目前還沒有任何前情提要。")
+    except:
+        pass
+    return "這是一段全新的人生故事紀錄，目前還沒有任何前情提要。"
+
+def update_user_context(user_id: str, new_context: str):
+    """更新使用者的人生背景前情提要"""
+    try:
+        supabase.table("user_contexts").upsert({
+            "user_id": user_id,
+            "life_context": new_context,
+            "updated_at": datetime.datetime.utcnow().isoformat()
+        }).execute()
+    except Exception as e:
+        print(f"⚠️ 更新 user_context 失敗: {e}")
 
 @app.post("/api/import/single")
 def import_single_day(request: ImportSingleRequest, current_user = Depends(get_current_user)):
@@ -581,23 +668,35 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
         if existing.data and len(existing.data) > 0:
             return {"success": True, "skipped": True, "message": "Date already exists"}
 
-        # 2. 呼叫 Gemini 分析日記
+        # 2. 讀取目前的人生脈絡前情提要
+        life_context = get_user_context(current_user.id)
+
+        # 3. 呼叫 Gemini 分析日記 (帶入前情提要)
         prompt = f"""
-        你現在是一個專業的心理分析師與記憶萃取專家。
-        請閱讀以下 {request.date_str} 的日記內容，並判斷這篇日記包含了「幾個獨立的事件或主題」。
-        請將每個獨立事件切割出來，提取豐富細節，並輸出為一個純 JSON 陣列 (Array) 格式（不要包含 ```json 等 Markdown 標記，直接回傳 [ 開始的字串）：
+        你現在是一個專業的心理分析師與記憶萃取專家，正在閱讀一部連續的個人生活日記。
+
+        【前情提要 — 截至目前為止的人生背景】
+        {life_context}
+
+        請根據以上前情提要，閱讀以下 {request.date_str} 的日記內容，並判斷這篇日記包含了「幾個獨立的事件或主題」。
+        如果今天的事件與前情提要中的人物或事件有所關聯，請在 summary 中自然地點出前後因果。
+        請將每個獨立事件切割出來，提取豐富細節，並輸出為一個純 JSON 陣列 (Array) 格式（不要包含 ```json 等 Markdown 標記）：
         [
             {{
-                "summary": "一段約50字的精要總結（請統一使用第一人稱「我」來代表日記的主人，不要使用「作者」等稱呼）",
+                "summary": "一段約60字的精要總結（請統一使用第一人稱「我」，如有跨事件關聯請自然提及）",
                 "topic": "這個事件的主要標籤（簡短名詞），例如：感情、專題討論、鋼琴社",
-                "keywords": ["關鍵字1", "關鍵字2", "陳政煒", "具體人事物"], // 請排除無意義通稱，只留專有名詞或具體事物
+                "keywords": ["具體人名", "地名", "獨特物件"], // 排除「聊天、訊息、朋友、我」等無意義通稱
                 "emotion_score": 0到100的整數 (0是最負面悲傷，100是最快樂正面，50是平靜),
                 "importance_weight": 1到5的整數 (1是最不重要，5是對人生影響重大),
-                "content_chunk": "與這個事件相關的日記原文段落（請保留原汁原味的金句或所有微小細節，不要刪減）",
-                "diary_time": "如果日記中有提到具體時間（如：傍晚六點半、早上），請推斷轉換為 24 小時制的 HH:MM 字串（例如：18:30, 08:00）；如果完全沒提到時間，請填 null"
+                "content_chunk": "與這個事件相關的日記原文段落（保留所有微小細節，不要刪減）",
+                "diary_time": "HH:MM 格式，若無則填 null",
+                "timezone": "標準時區字串，例如 Pacific/Auckland，若無則填 Asia/Taipei"
             }}
         ]
-        如果整篇日記只有一個主題，就回傳只有一個物件的陣列。
+        最後，請在 JSON 陣列的最後加上一個特殊物件（作為最後一個元素）：
+        {{ "__context_update__": "根據今天發生的所有事情，請用繁體中文更新並補充「前情提要」，請整合舊的前情提要內容，加入今天的新進展。保持在300字以內，重點保留重要人物的現況、未完結的事件進展、使用者目前的情緒狀態與重要計畫。" }}
+
+        如果整篇日記只有一個主題，就回傳兩個元素的陣列（一個事件 + 一個 __context_update__）。
         日記內容：
         {request.content}
         """
@@ -623,8 +722,17 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
         if not events:
             return {"success": False, "error": "Failed to parse events"}
 
+        # 4. 抽取 context_update 並分開正式事件
+        context_update = None
+        real_events = []
+        for ev in events:
+            if "__context_update__" in ev:
+                context_update = ev["__context_update__"]
+            else:
+                real_events.append(ev)
+
         inserted_count = 0
-        for event in events:
+        for event in real_events:
             embedding_text = f"[{request.date_str}] 標籤:{event.get('topic','')} - {event.get('summary','')}。相關細節：{', '.join(event.get('keywords',[]))}。原文：{event.get('content_chunk', '')}"
             embedding = get_embedding(embedding_text)
             
@@ -632,6 +740,7 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
                 "user_id": current_user.id,
                 "diary_date": request.date_str,
                 "diary_time": event.get("diary_time"),
+                "timezone": event.get("timezone"),
                 "topic": encrypt_text(event.get("topic", ""), current_user.email),
                 "summary": encrypt_text(event.get("summary", ""), current_user.email),
                 "keywords": [encrypt_text(k, current_user.email) for k in event.get("keywords", [])],
@@ -642,13 +751,16 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
             }
             supabase.table("memories").insert(data).execute()
             inserted_count += 1
+
+        # 5. 更新使用者的全局脈絡
+        if context_update:
+            update_user_context(current_user.id, context_update)
             
         return {"success": True, "inserted_count": inserted_count}
     except Exception as e:
         import traceback
         traceback.print_exc()
         return {"success": False, "error": str(e)}
-
 
 
 @app.post("/api/entities/build")
