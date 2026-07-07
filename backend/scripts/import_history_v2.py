@@ -167,11 +167,11 @@ def main():
     if len(sys.argv) < 2:
         print("使用方式: python import_history_v2.py <user_id> [diary_file]")
         print("  user_id    : 您的 Supabase User ID（從 Supabase Dashboard > Authentication > Users 查看）")
-        print("  diary_file : 日記檔案路徑（預設: scripts/diary.txt）")
+        print("  diary_file : 日記檔案路徑（預設: 日記.txt）")
         exit(1)
 
     user_id = sys.argv[1]
-    diary_file = sys.argv[2] if len(sys.argv) > 2 else "scripts/diary.txt"
+    diary_file = sys.argv[2] if len(sys.argv) > 2 else "日記.txt"
 
     # 取得 user_email 用於加密
     try:

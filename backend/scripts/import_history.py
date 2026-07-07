@@ -101,7 +101,7 @@ def analyze_diary(content: str, date_str: str) -> tuple[list, int]:
 def parse_and_upload(file_path: str):
     if not os.path.exists(file_path):
         print(f"❌ 找不到日記檔案：{file_path}")
-        print("請在同一個資料夾下建立 'diary.txt' 並貼上你的日記內容。")
+        print("請在同一個資料夾下建立 '日記.txt' 並貼上你的日記內容。")
         return
 
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -183,5 +183,5 @@ def parse_and_upload(file_path: str):
 
 if __name__ == "__main__":
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    diary_path = os.path.join(current_dir, "diary.txt")
+    diary_path = os.path.join(current_dir, "日記.txt")
     parse_and_upload(diary_path)
