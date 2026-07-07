@@ -26,7 +26,7 @@ client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 # 初始化 Cohere 客戶端 (專供文字生成)
 import cohere
-co = cohere.ClientV2(os.environ.get("COHERE_API_KEY"))
+co = cohere.ClientV2(os.environ.get("COHERE_API_KEY"), timeout=300.0)
 
 # ── 加密模組 (與 security.py 相同邏輯) ──────────────────────────────────────
 from cryptography.fernet import Fernet
@@ -102,25 +102,34 @@ def analyze_diary_with_context(content: str, date_str: str, life_context: str) -
     attempt = 0
     while True:
         try:
-            # === 原 Gemini 實作 (保留備用) ===
-            # response = client.models.generate_content(
-            #     model='gemini-2.5-flash-lite',
-            #     contents=prompt,
-            #     config=types.GenerateContentConfig(response_mime_type="application/json")
-            # )
-            # ===============================
-
             # === Cohere 實作 ===
             response = co.chat(
                 model='command-r-08-2024',
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=4000
             )
-            break  # 成功就跳出
+            
+            raw_text = response.message.content[0].text.strip()
+            
+            # 強健的 JSON 擷取：只取最外層的 [ ] 範圍，忽略 AI 亂加的廢話
+            start_idx = raw_text.find('[')
+            end_idx = raw_text.rfind(']')
+            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                raw_text = raw_text[start_idx:end_idx+1]
+            else:
+                # 如果找不到陣列，試著找物件 {}
+                start_idx = raw_text.find('{')
+                end_idx = raw_text.rfind('}')
+                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                    raw_text = raw_text[start_idx:end_idx+1]
+
+            all_items = json.loads(raw_text, strict=False)
+            break  # 成功解析 JSON 就跳出迴圈
+            
         except Exception as e:
             error_str = str(e)
-            # Cohere 遇到 429 也會拋出異常，我們一樣做無窮重試
-            if "429" in error_str or "503" in error_str or "UNAVAILABLE" in error_str or "Too Many Requests" in error_str:
+            # Cohere 遇到 429 或逾時 (timeout) 都做無窮重試
+            if "429" in error_str or "503" in error_str or "UNAVAILABLE" in error_str or "Too Many Requests" in error_str or "timed out" in error_str.lower() or "timeout" in error_str.lower():
                 match = re.search(r"Please retry in (\d+(?:\.\d+)?)s", error_str)
                 if not match:
                     match = re.search(r"retryDelay': '(\d+)s'", error_str)
@@ -128,36 +137,19 @@ def analyze_diary_with_context(content: str, date_str: str, life_context: str) -
                 attempt += 1
                 print(f"   => ⚠️ 速限/暫時不可用，等待 {wait_time:.1f} 秒後第 {attempt} 次重試（永不放棄）...")
                 time.sleep(wait_time)
+            elif isinstance(e, json.JSONDecodeError):
+                attempt += 1
+                print(f"   => ⚠️ JSON 解析失敗 (可能因字數超過 4000 Token 被截斷)，第 {attempt} 次重試...")
+                # 提醒 AI 精簡，避免再次被截斷
+                prompt += "\n【系統提示】上一次輸出因長度過長被截斷，導致 JSON 解析失敗。請將內容再精簡一些，並確保最後的 JSON 陣列括號 `]` 有完整閉合。"
+                time.sleep(2)
             else:
-                raise e  # 非速限錯誤才真的放棄
+                raise e  # 非速限、非 JSON 解析錯誤才真的放棄
 
-    token_count = 0
-    # if response and response.usage_metadata:
-    #     token_count = response.usage_metadata.total_token_count
-
-    # Cohere 取文字的方式：
-    raw_text = response.message.content[0].text.strip()
-    
-    # 強健的 JSON 擷取：只取最外層的 [ ] 範圍，忽略 AI 亂加的廢話
-    start_idx = raw_text.find('[')
-    end_idx = raw_text.rfind(']')
-    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-        raw_text = raw_text[start_idx:end_idx+1]
-    else:
-        # 如果找不到陣列，試著找物件 {}
-        start_idx = raw_text.find('{')
-        end_idx = raw_text.rfind('}')
-        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-            raw_text = raw_text[start_idx:end_idx+1]
-
-    try:
-        all_items = json.loads(raw_text, strict=False)
-    except Exception as e:
-        print(f"   ❌ JSON 解析失敗，回傳內容為:\n{raw_text[:200]}...")
-        raise e
-        
     if not isinstance(all_items, list):
         all_items = [all_items]
+
+    token_count = 0
 
     events = []
     context_update = None
@@ -235,13 +227,40 @@ def main():
 
         print(f"🔍 分析 {date_str}（{len(diary_text)} 字）...", end="", flush=True)
 
+        # 針對超長日記進行自動分段 (上限 1500 字)，避免 AI 回覆被截斷
+        max_chunk_size = 1500
+        text_chunks = []
+        if len(diary_text) <= max_chunk_size:
+            text_chunks = [diary_text]
+        else:
+            paragraphs = diary_text.split('\n')
+            curr_chunk = ""
+            for p in paragraphs:
+                if len(curr_chunk) + len(p) > max_chunk_size and curr_chunk:
+                    text_chunks.append(curr_chunk)
+                    curr_chunk = p + "\n"
+                else:
+                    curr_chunk += p + "\n"
+            if curr_chunk:
+                text_chunks.append(curr_chunk)
+
         try:
-            events, context_update, tokens = analyze_diary_with_context(diary_text, date_str, current_context)
-            total_tokens += tokens
-            print(f" => 切割出 {len(events)} 個事件（消耗 {tokens} tokens）")
+            all_events = []
+            for i, chunk in enumerate(text_chunks):
+                if len(text_chunks) > 1:
+                    print(f"\n   -> 分析段落 {i+1}/{len(text_chunks)} ({len(chunk)} 字)...", end="", flush=True)
+                
+                events, context_update, tokens = analyze_diary_with_context(chunk, date_str, current_context)
+                all_events.extend(events)
+                total_tokens += tokens
+                if context_update:
+                    current_context = context_update
+                    update_user_context(user_id, current_context)
+                    
+            print(f" => 總共切割出 {len(all_events)} 個事件")
 
             # 將事件寫入資料庫
-            for event in events:
+            for event in all_events:
                 embedding_text = f"[{date_str}] 標籤:{event.get('topic','')} - {event.get('summary','')}。相關細節：{', '.join(event.get('keywords',[]))}。原文：{event.get('content_chunk', '')}"
                 embedding = get_embedding(embedding_text)
 
