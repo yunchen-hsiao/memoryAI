@@ -6,6 +6,7 @@ interface Memory {
   id: string;
   diary_date: string;
   diary_time?: string;
+  timezone?: string;
   topic: string;
   summary: string;
   emotion_score: number;
@@ -110,6 +111,7 @@ export default function MemoryTimeline({ token }: MemoryTimelineProps) {
     setEditingMemory({
       diary_date: new Date().toISOString().split('T')[0],
       diary_time: '',
+      timezone: 'Asia/Taipei',
       topic: '',
       summary: '',
       emotion_score: 50,
@@ -228,6 +230,11 @@ export default function MemoryTimeline({ token }: MemoryTimelineProps) {
                       <span className="flex items-center gap-1.5 text-xs sm:text-sm px-2.5 py-1 rounded-full w-fit" style={{ color: 'var(--color-m-muted)', backgroundColor: 'var(--color-m-panel-alt)' }}>
                         <Calendar className="w-3.5 h-3.5" />
                         {memory.diary_date} {memory.diary_time && <span>| {memory.diary_time}</span>}
+                        {memory.timezone && memory.timezone !== 'Asia/Taipei' && (
+                          <span className="ml-1 px-1.5 py-0.5 rounded" style={{ backgroundColor: 'rgba(255,255,255,0.1)', fontSize: '0.7rem' }}>
+                            🌍 {memory.timezone}
+                          </span>
+                        )}
                       </span>
                     </div>
                   </div>
@@ -273,6 +280,10 @@ export default function MemoryTimeline({ token }: MemoryTimelineProps) {
                 <div>
                   <label className="block text-sm font-medium mb-1" style={{ color: 'var(--color-m-muted)' }}>時間 (選填)</label>
                   <input type="time" value={editingMemory.diary_time || ''} onChange={e => setEditingMemory({...editingMemory, diary_time: e.target.value})} className="w-full rounded-lg p-2.5 focus:outline-none" style={{ backgroundColor: 'var(--color-m-panel-alt)', border: '1px solid var(--color-m-border)', color: 'var(--color-m-text)' }} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1" style={{ color: 'var(--color-m-muted)' }}>時區 (例如 Asia/Taipei)</label>
+                  <input type="text" value={editingMemory.timezone || ''} onChange={e => setEditingMemory({...editingMemory, timezone: e.target.value})} className="w-full rounded-lg p-2.5 focus:outline-none" style={{ backgroundColor: 'var(--color-m-panel-alt)', border: '1px solid var(--color-m-border)', color: 'var(--color-m-text)' }} placeholder="Asia/Taipei" />
                 </div>
               </div>
               <div>

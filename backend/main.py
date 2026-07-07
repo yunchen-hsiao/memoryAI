@@ -6,8 +6,14 @@ from pydantic import BaseModel
 import os
 import datetime
 from dotenv import load_dotenv
+# 初始化 Google Gemini 客戶端 (專供 Embedding 使用)
 from google import genai
 from google.genai import types
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+
+# 初始化 Cohere 客戶端 (專供文字生成)
+import cohere
+co = cohere.ClientV2(os.environ.get("COHERE_API_KEY"))
 from supabase import create_client, Client
 
 load_dotenv()
@@ -22,7 +28,7 @@ supabase: Client = create_client(supabase_url, supabase_key)
 gemini_api_key = os.environ.get("GEMINI_API_KEY")
 if not gemini_api_key:
     print("WARNING: GEMINI_API_KEY environment variable is missing!")
-client = genai.Client(api_key=gemini_api_key)
+# client = genai.Client(api_key=gemini_api_key)
 
 app = FastAPI(title="MemoryAI API")
 
@@ -268,33 +274,25 @@ def chat(request: ChatRequest, current_user = Depends(get_current_user)):
         formatted_history = []
         recent_history = request.history[-15:] if len(request.history) > 15 else request.history
         for msg in recent_history:
-            role = "user" if msg["role"] == "user" else "model"
-            formatted_history.append({"role": role, "parts": [{"text": msg["content"]}]})
+            role = "user" if msg["role"] == "user" else "assistant"
+            formatted_history.append({"role": role, "content": msg["content"]})
             
-        chat_session = client.chats.create(
-            model='gemini-2.5-flash',
-            config=genai.types.GenerateContentConfig(
-                system_instruction=system_instruction
-            ),
-            history=formatted_history
-        )
+        # chat_session = client.chats.create(
+        #     model='gemini-2.5-flash',
+        #     config=genai.types.GenerateContentConfig(
+        #         system_instruction=system_instruction
+        #     ),
+        #     history=formatted_history
+        # )
         
-        import time
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                response = chat_session.send_message(request.message)
-                return {"reply": response.text}
-            except Exception as e:
-                if "503" in str(e) and attempt < max_retries - 1:
-                    print(f"Chat API 503 Error. Retrying in 5 seconds... (Attempt {attempt + 1}/{max_retries})")
-                    time.sleep(5)
-                else:
-                    raise e
+        messages = [{"role": "system", "content": system_instruction}] + formatted_history + [{"role": "user", "content": request.message}]
+        response = co.chat(model="command-r-08-2024", messages=messages)
+        return {"reply": response.message.content[0].text}
+
     except Exception as e:
         import traceback
-
-# ... (Previous code remains same until dashboard/graph endpoint)
+        traceback.print_exc()
+        return {"error": str(e)}
 
 @app.get("/api/dashboard/graph")
 def get_dashboard_graph(current_user = Depends(get_current_user)):
@@ -552,42 +550,85 @@ def summarize_chat(request: ChatRequest, current_user = Depends(get_current_user
 
         import time
         max_retries = 3
+        all_items = None
         for attempt in range(max_retries):
             try:
-                response = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                    )
+                # response = client.models.generate_content(
+                #     model='gemini-2.5-flash-lite',
+                #     contents=prompt,
+                #     config=types.GenerateContentConfig(
+                #         response_mime_type="application/json",
+                #     )
+                # )
+                # all_items = json.loads(response.text)
+                
+                response = co.chat(
+                    model='command-r-08-2024',
+                    messages=[{"role": "user", "content": prompt}]
                 )
                 
-                all_items = json.loads(response.text)
-                # 將 context_update 與實際事件分開回傳
-                context_update = None
-                real_events = []
-                for item in all_items:
-                    if "__context_update__" in item:
-                        context_update = item["__context_update__"]
-                    else:
-                        real_events.append(item)
-                if context_update:
-                    update_user_context(current_user.id, context_update)
-                return {"success": True, "events": real_events}
+                raw_text = response.message.content[0].text.strip()
+                start_idx = raw_text.find('[')
+                end_idx = raw_text.rfind(']')
+                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                    raw_text = raw_text[start_idx:end_idx+1]
+                else:
+                    start_idx = raw_text.find('{')
+                    end_idx = raw_text.rfind('}')
+                    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                        raw_text = raw_text[start_idx:end_idx+1]
+                
+                all_items = json.loads(raw_text, strict=False)
+                break
             except Exception as e:
                 if "503" in str(e) and attempt < max_retries - 1:
-                    print(f"Summarize API 503 Error. Retrying in 3 seconds... (Attempt {attempt + 1}/{max_retries})")
                     time.sleep(3)
-                else:
+                elif attempt == max_retries - 1:
                     raise e
+                    
+        # 將 context_update 與實際事件分開回傳
+        context_update = None
+        real_events = []
+        for item in all_items:
+            if "__context_update__" in item:
+                context_update = item["__context_update__"]
+            else:
+                real_events.append(item)
+        if context_update:
+            update_user_context(current_user.id, context_update)
+        return {"success": True, "events": real_events}
     except Exception as e:
         import traceback
         traceback.print_exc()
         return {"error": str(e)}
 
 @app.get("/api/memories/monthly_summary")
-def monthly_summary(year: int, month: int, current_user = Depends(get_current_user)):
+def monthly_summary(year: int, month: int, force_regenerate: bool = False, current_user = Depends(get_current_user)):
     """For the Dashboard: generate a narrative story summary for a given month."""
+    import os, json
+    CACHE_FILE = "monthly_summaries_cache.json"
+    
+    cache_key = f"{year:04d}-{month:02d}"
+    user_cache = {}
+    
+    # 讀取本地快取
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                user_cache = json.load(f)
+        except Exception:
+            user_cache = {}
+            
+    user_id = str(current_user.id)
+    if user_id not in user_cache:
+        user_cache[user_id] = {}
+        
+    # 如果不是強制重新生成，且快取中有資料，直接回傳
+    if not force_regenerate and cache_key in user_cache[user_id]:
+        encrypted_summary = user_cache[user_id][cache_key]
+        summary = decrypt_text(encrypted_summary)
+        return {"success": True, "summary": summary, "cached": True}
+
     try:
         # 查詢該月的所有記憶
         date_from = f"{year:04d}-{month:02d}-01"
@@ -622,8 +663,18 @@ def monthly_summary(year: int, month: int, current_user = Depends(get_current_us
         - 直接回傳純文字內容，不要加標題。
         """
 
-        response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
-        return {"success": True, "summary": response.text.strip(), "memory_count": len(res.data)}
+        response = co.chat(
+            model='command-r-08-2024',
+            messages=[{"role": "user", "content": prompt}]
+        )
+        summary_text = response.message.content[0].text.strip()
+        
+        # 存入快取
+        user_cache[user_id][cache_key] = encrypt_text(summary_text)
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(user_cache, f, ensure_ascii=False, indent=2)
+            
+        return {"success": True, "summary": summary_text, "memory_count": len(res.data), "cached": False}
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -671,7 +722,7 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
         # 2. 讀取目前的人生脈絡前情提要
         life_context = get_user_context(current_user.id)
 
-        # 3. 呼叫 Gemini 分析日記 (帶入前情提要)
+        # 3. 呼叫分析工具 (帶入前情提要)
         prompt = f"""
         你現在是一個專業的心理分析師與記憶萃取專家，正在閱讀一部連續的個人生活日記。
 
@@ -694,7 +745,7 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
             }}
         ]
         最後，請在 JSON 陣列的最後加上一個特殊物件（作為最後一個元素）：
-        {{ "__context_update__": "根據今天發生的所有事情，請用繁體中文更新並補充「前情提要」，請整合舊的前情提要內容，加入今天的新進展。保持在300字以內，重點保留重要人物的現況、未完結的事件進展、使用者目前的情緒狀態與重要計畫。" }}
+        {{ "__context_update__": "根據今天發生的所有事情，請用繁體中文更新並補充「前情提要」，請整合舊的前情提要內容，加入今天的新進展。保持在300字以內，重點保留重要人物的現況、未完結的事件進展、使用者目前的情緒狀態與重要計畫。\n【嚴重警告】絕對不可以竄改或替換任何人名！請完全照抄原文出現的名字，不要用同音字替換！" }}
 
         如果整篇日記只有一個主題，就回傳兩個元素的陣列（一個事件 + 一個 __context_update__）。
         日記內容：
@@ -706,12 +757,30 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
         events = None
         for attempt in range(max_retries):
             try:
-                response = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=prompt,
-                    config=types.GenerateContentConfig(response_mime_type="application/json")
+                # response = client.models.generate_content(
+                # model='gemini-2.5-flash-lite',
+                #     contents=prompt,
+                #     config=types.GenerateContentConfig(response_mime_type="application/json")
+                # )
+                # events = json.loads(response.text)
+                
+                response = co.chat(
+                    model='command-r-08-2024',
+                    messages=[{"role": "user", "content": prompt}]
                 )
-                events = json.loads(response.text)
+                
+                raw_text = response.message.content[0].text.strip()
+                start_idx = raw_text.find('[')
+                end_idx = raw_text.rfind(']')
+                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                    raw_text = raw_text[start_idx:end_idx+1]
+                else:
+                    start_idx = raw_text.find('{')
+                    end_idx = raw_text.rfind('}')
+                    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                        raw_text = raw_text[start_idx:end_idx+1]
+                
+                events = json.loads(raw_text, strict=False)
                 break
             except Exception as e:
                 if "503" in str(e) and attempt < max_retries - 1:

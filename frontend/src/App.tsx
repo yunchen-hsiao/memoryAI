@@ -19,6 +19,7 @@ interface SummarizedEvent {
   content_chunk: string;
   diary_date: string;
   diary_time: string;
+  timezone?: string;
 }
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -160,7 +161,8 @@ function App() {
             emotion_score: event.emotion_score,
             importance_weight: event.importance_weight,
             keywords: event.keywords,
-            content: event.content_chunk
+            content: event.content_chunk,
+            timezone: event.timezone
           })
         });
       }

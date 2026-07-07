@@ -19,8 +19,14 @@ supabase_url = os.environ.get("SUPABASE_URL")
 supabase_key = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(supabase_url, supabase_key)
 
-# 設定 Gemini
+# 初始化 Google Gemini 客戶端 (專供 Embedding 使用)
+from google import genai
+from google.genai import types
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+
+# 初始化 Cohere 客戶端 (專供文字生成)
+import cohere
+co = cohere.ClientV2(os.environ.get("COHERE_API_KEY"))
 
 # ── 加密模組 (與 security.py 相同邏輯) ──────────────────────────────────────
 from cryptography.fernet import Fernet
@@ -55,7 +61,7 @@ def update_user_context(user_id: str, new_context: str):
     supabase.table("user_contexts").upsert({
         "user_id": user_id,
         "life_context": new_context,
-        "updated_at": datetime.datetime.utcnow().isoformat()
+        "updated_at": datetime.datetime.now(datetime.UTC).isoformat()
     }).execute()
 
 # ── 核心分析函式（帶前情提要）────────────────────────────────────────────────
@@ -86,42 +92,69 @@ def analyze_diary_with_context(content: str, date_str: str, life_context: str) -
         }}
     ]
     最後，請在 JSON 陣列的最後加上一個特殊物件（作為最後一個元素）：
-    {{ "__context_update__": "根據今天發生的所有事情，請用繁體中文更新並補充「前情提要」，請整合舊的前情提要內容，加入今天的新進展。保持在300字以內，重點保留重要人物的現況、未完結的事件進展、使用者目前的情緒狀態與重要計畫。" }}
+    {{ "__context_update__": "根據今天發生的所有事情，請用繁體中文更新並補充「前情提要」，請整合舊的前情提要內容，加入今天的新進展。保持在300字以內，重點保留重要人物的現況、未完結的事件進展、使用者目前的情緒狀態與重要計畫。\n【嚴重警告】絕對不可以竄改或替換任何人名！請完全照抄原文出現的名字（例如：陳政煒、鄭旭宸等），不要用同音字替換！" }}
 
     如果整篇日記只有一個主題，就回傳兩個元素的陣列（一個事件 + 一個 __context_update__）。
     日記內容：
     {content}
     """
 
-    max_retries = 5
-    response = None
-    for attempt in range(max_retries):
+    attempt = 0
+    while True:
         try:
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-                config=types.GenerateContentConfig(response_mime_type="application/json")
+            # === 原 Gemini 實作 (保留備用) ===
+            # response = client.models.generate_content(
+            #     model='gemini-2.5-flash-lite',
+            #     contents=prompt,
+            #     config=types.GenerateContentConfig(response_mime_type="application/json")
+            # )
+            # ===============================
+
+            # === Cohere 實作 ===
+            response = co.chat(
+                model='command-r-08-2024',
+                messages=[{"role": "user", "content": prompt}]
             )
-            break
+            break  # 成功就跳出
         except Exception as e:
-            if ("503" in str(e) or "UNAVAILABLE" in str(e) or "429" in str(e)) and attempt < max_retries - 1:
-                wait_time = 10 + (attempt * 10)
-                print(f"   => ⚠️ API 忙碌，等待 {wait_time} 秒後重試 ({attempt+1}/{max_retries})...")
+            error_str = str(e)
+            # Cohere 遇到 429 也會拋出異常，我們一樣做無窮重試
+            if "429" in error_str or "503" in error_str or "UNAVAILABLE" in error_str or "Too Many Requests" in error_str:
+                match = re.search(r"Please retry in (\d+(?:\.\d+)?)s", error_str)
+                if not match:
+                    match = re.search(r"retryDelay': '(\d+)s'", error_str)
+                wait_time = float(match.group(1)) + 2.0 if match else 60.0
+                attempt += 1
+                print(f"   => ⚠️ 速限/暫時不可用，等待 {wait_time:.1f} 秒後第 {attempt} 次重試（永不放棄）...")
                 time.sleep(wait_time)
             else:
-                raise e
+                raise e  # 非速限錯誤才真的放棄
 
     token_count = 0
-    if response and response.usage_metadata:
-        token_count = response.usage_metadata.total_token_count
+    # if response and response.usage_metadata:
+    #     token_count = response.usage_metadata.total_token_count
 
-    raw_text = response.text.strip()
-    if raw_text.startswith("```json"):
-        raw_text = raw_text[7:-3]
-    elif raw_text.startswith("```"):
-        raw_text = raw_text[3:-3]
+    # Cohere 取文字的方式：
+    raw_text = response.message.content[0].text.strip()
+    
+    # 強健的 JSON 擷取：只取最外層的 [ ] 範圍，忽略 AI 亂加的廢話
+    start_idx = raw_text.find('[')
+    end_idx = raw_text.rfind(']')
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        raw_text = raw_text[start_idx:end_idx+1]
+    else:
+        # 如果找不到陣列，試著找物件 {}
+        start_idx = raw_text.find('{')
+        end_idx = raw_text.rfind('}')
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            raw_text = raw_text[start_idx:end_idx+1]
 
-    all_items = json.loads(raw_text, strict=False)
+    try:
+        all_items = json.loads(raw_text, strict=False)
+    except Exception as e:
+        print(f"   ❌ JSON 解析失敗，回傳內容為:\n{raw_text[:200]}...")
+        raise e
+        
     if not isinstance(all_items, list):
         all_items = [all_items]
 
@@ -211,11 +244,23 @@ def main():
                 embedding_text = f"[{date_str}] 標籤:{event.get('topic','')} - {event.get('summary','')}。相關細節：{', '.join(event.get('keywords',[]))}。原文：{event.get('content_chunk', '')}"
                 embedding = get_embedding(embedding_text)
 
+                diary_time = event.get("diary_time")
+                if diary_time == "null" or diary_time == "" or diary_time is None:
+                    diary_time = None
+                else:
+                    # 避免 AI 回傳多個時間 (例如 "07:30, 09:00")
+                    time_match = re.search(r"(\d{2}:\d{2})", str(diary_time))
+                    diary_time = time_match.group(1) if time_match else None
+                    
+                timezone = event.get("timezone")
+                if timezone == "null" or timezone == "":
+                    timezone = None
+
                 data = {
                     "user_id": user_id,
                     "diary_date": date_str,
-                    "diary_time": event.get("diary_time"),
-                    "timezone": event.get("timezone"),
+                    "diary_time": diary_time,
+                    "timezone": timezone,
                     "topic": encrypt_text(event.get("topic", ""), user_email),
                     "summary": encrypt_text(event.get("summary", ""), user_email),
                     "keywords": [encrypt_text(k, user_email) for k in event.get("keywords", [])],
@@ -233,9 +278,10 @@ def main():
                 update_user_context(user_id, current_context)
                 print(f"   📝 前情提要已更新（前50字）：{current_context[:50]}...")
 
-            # 避免 429，每天之間稍微暫停
-            print(f"   ⏱️  等待 3 秒後繼續...")
-            time.sleep(3)
+            # 避免觸發 Gemini 免費版 15 RPM (每分鐘15次) 的嚴格限制
+            # 加上呼叫 Embedding 的次數，建議每次處理完一天就硬性等待 6 秒
+            print(f"   ⏱️  (防 429) 等待 6 秒後繼續...")
+            time.sleep(6)
 
         except Exception as e:
             print(f"\n   ❌ {date_str} 分析失敗：{e}")

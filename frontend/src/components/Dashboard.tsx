@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, Brush } from 'recharts';
-import { Brain, TrendingUp, PieChart as PieChartIcon, Calendar, Heart, Sparkles, Network } from 'lucide-react';
+import { Brain, TrendingUp, PieChart as PieChartIcon, Calendar, Heart, Sparkles, Network, BookOpen } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 import MemoryGraph from './MemoryGraph';
 import { DashboardIcon } from './Icons';
 
@@ -25,6 +26,35 @@ export default function Dashboard({ token }: DashboardProps) {
   }>({ emotion_trends: [], keyword_distribution: [] });
   const [loading, setLoading] = useState(true);
   const [selectedEntityIdx, setSelectedEntityIdx] = useState(0);
+
+  // 本月故事回顧
+  const now = new Date();
+  const [summaryYear, setSummaryYear] = useState(now.getFullYear());
+  const [summaryMonth, setSummaryMonth] = useState(now.getMonth() + 1);
+  const [monthlySummary, setMonthlySummary] = useState<string | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryMemoryCount, setSummaryMemoryCount] = useState(0);
+
+  const fetchMonthlySummary = async (year: number, month: number, forceRegenerate: boolean = false) => {
+    setSummaryLoading(true);
+    setMonthlySummary(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/memories/monthly_summary?year=${year}&month=${month}&force_regenerate=${forceRegenerate}`, {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      });
+      const data = await res.json();
+      if (data.success && data.summary) {
+        setMonthlySummary(data.summary);
+        setSummaryMemoryCount(data.memory_count || 0);
+      } else {
+        setMonthlySummary(data.message || '這個月份還沒有記憶。');
+      }
+    } catch (err) {
+      setMonthlySummary('載入失敗，請重試。');
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
 
   const handleBuildEntities = async () => {
     try {
@@ -85,6 +115,71 @@ export default function Dashboard({ token }: DashboardProps) {
         >
           重新編譯核心人物網
         </button>
+      </div>
+
+      {/* 本月故事回顧 */}
+      <div className="rounded-2xl p-5" style={{ backgroundColor: 'var(--color-m-panel)', border: '1px solid var(--color-m-border)' }}>
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-2">
+            <BookOpen className="w-5 h-5" style={{ color: 'var(--color-m-accent2)' }} />
+            <h3 className="font-semibold" style={{ color: 'var(--color-m-text)' }}>本月故事回顧</h3>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              value={summaryYear}
+              onChange={e => setSummaryYear(Number(e.target.value))}
+              className="rounded-lg px-2 py-1 text-sm focus:outline-none"
+              style={{ backgroundColor: 'var(--color-m-panel-alt)', border: '1px solid var(--color-m-border)', color: 'var(--color-m-text)' }}
+            >
+              {[2025, 2026, 2027].map(y => <option key={y} value={y}>{y}年</option>)}
+            </select>
+            <select
+              value={summaryMonth}
+              onChange={e => setSummaryMonth(Number(e.target.value))}
+              className="rounded-lg px-2 py-1 text-sm focus:outline-none"
+              style={{ backgroundColor: 'var(--color-m-panel-alt)', border: '1px solid var(--color-m-border)', color: 'var(--color-m-text)' }}
+            >
+              {Array.from({length: 12}, (_, i) => i + 1).map(m => <option key={m} value={m}>{m}月</option>)}
+            </select>
+            <button
+              onClick={() => fetchMonthlySummary(summaryYear, summaryMonth, false)}
+              disabled={summaryLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
+              style={{ background: 'linear-gradient(135deg, var(--color-m-accent1), var(--color-m-accent2))', color: 'white' }}
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              {summaryLoading ? '載入中...' : '查看回顧'}
+            </button>
+            <button
+              onClick={() => fetchMonthlySummary(summaryYear, summaryMonth, true)}
+              disabled={summaryLoading}
+              className="flex items-center justify-center px-2 py-1.5 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
+              style={{ backgroundColor: 'var(--color-m-panel)', border: '1px solid var(--color-m-border)', color: 'var(--color-m-text)' }}
+              title="強制 AI 重新生成 (會消耗額度)"
+            >
+              🔄
+            </button>
+          </div>
+        </div>
+        {summaryLoading && (
+          <div className="flex items-center gap-3 py-6" style={{ color: 'var(--color-m-muted)' }}>
+            <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: 'var(--color-m-border)', borderTopColor: 'var(--color-m-accent1)' }}></div>
+            AI 正在為您回顧這個月的故事...
+          </div>
+        )}
+        {monthlySummary && !summaryLoading && (
+          <div>
+            {summaryMemoryCount > 0 && (
+              <p className="text-xs mb-3" style={{ color: 'var(--color-m-muted)' }}>根據 {summaryMemoryCount} 則記憶生成</p>
+            )}
+            <div className="leading-relaxed prose prose-sm max-w-none" style={{ color: 'var(--color-m-text)' }}>
+              <ReactMarkdown>{monthlySummary}</ReactMarkdown>
+            </div>
+          </div>
+        )}
+        {!monthlySummary && !summaryLoading && (
+          <p className="text-sm py-4 text-center" style={{ color: 'var(--color-m-muted)' }}>選擇年月後，點擊「生成回顧」讓 AI 為您撰寫本月故事！</p>
+        )}
       </div>
 
       {/* Summary Stats Row */}
