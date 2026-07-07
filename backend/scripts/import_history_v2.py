@@ -113,7 +113,8 @@ def analyze_diary_with_context(content: str, date_str: str, life_context: str) -
             # === Cohere 實作 ===
             response = co.chat(
                 model='command-r-08-2024',
-                messages=[{"role": "user", "content": prompt}]
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=4000
             )
             break  # 成功就跳出
         except Exception as e:

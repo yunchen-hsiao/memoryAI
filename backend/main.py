@@ -286,7 +286,7 @@ def chat(request: ChatRequest, current_user = Depends(get_current_user)):
         # )
         
         messages = [{"role": "system", "content": system_instruction}] + formatted_history + [{"role": "user", "content": request.message}]
-        response = co.chat(model="command-r-08-2024", messages=messages)
+        response = co.chat(model="command-r-08-2024", messages=messages, max_tokens=4000)
         return {"reply": response.message.content[0].text}
 
     except Exception as e:
@@ -665,7 +665,8 @@ def monthly_summary(year: int, month: int, force_regenerate: bool = False, curre
 
         response = co.chat(
             model='command-r-08-2024',
-            messages=[{"role": "user", "content": prompt}]
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=4000
         )
         summary_text = response.message.content[0].text.strip()
         

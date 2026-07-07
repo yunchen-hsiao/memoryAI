@@ -27,7 +27,7 @@ export default function Dashboard({ token }: DashboardProps) {
   const [loading, setLoading] = useState(true);
   const [selectedEntityIdx, setSelectedEntityIdx] = useState(0);
 
-  // 本月故事回顧
+  // 該月日記回顧
   const now = new Date();
   const [summaryYear, setSummaryYear] = useState(now.getFullYear());
   const [summaryMonth, setSummaryMonth] = useState(now.getMonth() + 1);
@@ -117,12 +117,12 @@ export default function Dashboard({ token }: DashboardProps) {
         </button>
       </div>
 
-      {/* 本月故事回顧 */}
+      {/* 該月日記回顧 */}
       <div className="rounded-2xl p-5" style={{ backgroundColor: 'var(--color-m-panel)', border: '1px solid var(--color-m-border)' }}>
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
           <div className="flex items-center gap-2">
             <BookOpen className="w-5 h-5" style={{ color: 'var(--color-m-accent2)' }} />
-            <h3 className="font-semibold" style={{ color: 'var(--color-m-text)' }}>本月故事回顧</h3>
+            <h3 className="font-semibold" style={{ color: 'var(--color-m-text)' }}>該月日記回顧</h3>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <select
