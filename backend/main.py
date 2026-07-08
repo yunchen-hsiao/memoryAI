@@ -629,9 +629,11 @@ def monthly_summary(year: int, month: int, force_regenerate: bool = False, curre
         return {"success": True, "summary": summary, "cached": True}
 
     try:
-        # 查詢該月的所有記憶
+        import calendar
+        # 查詢該月的所有記憶（用 calendar.monthrange 取得該月實際最後一天，避免 31 日不存在的問題）
+        last_day = calendar.monthrange(year, month)[1]
         date_from = f"{year:04d}-{month:02d}-01"
-        date_to = f"{year:04d}-{month:02d}-31"
+        date_to = f"{year:04d}-{month:02d}-{last_day:02d}"
         res = supabase.table("memories") \
             .select("summary, topic, diary_date, diary_time, keywords, emotion_score") \
             .eq("user_id", current_user.id) \
