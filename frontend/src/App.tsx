@@ -144,11 +144,11 @@ function App() {
   const handleArchive = async () => {
     if (!summarizedEvents) return;
 
-    // 重建完整對話原文作為 content，確保原始內容不被 AI 改寫版本取代
-    const fullChatText = messages.map(m => {
-      const role = m.role === 'user' ? '我' : 'AI';
-      return `${role}: ${m.content}`;
-    }).join('\n');
+    // 只提取 user 的訊息作為原始日記紀錄
+    const fullChatText = messages
+      .filter(m => m.role === 'user')
+      .map(m => m.content)
+      .join('\n\n');
 
     try {
       for (const event of summarizedEvents) {

@@ -391,6 +391,8 @@ class MemoryUpdate(BaseModel):
     emotion_score: Optional[int] = None
     keywords: Optional[List[str]] = None
     original_text: Optional[str] = None
+    content: Optional[str] = None
+    importance_weight: Optional[int] = None
 
 class MemoryCreate(BaseModel):
     diary_date: str
