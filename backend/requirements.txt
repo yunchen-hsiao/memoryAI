@@ -5,6 +5,7 @@ certifi==2026.5.20
 cffi==2.0.0
 charset-normalizer==3.4.7
 click==8.4.1
+cohere==5.15.0
 colorama==0.4.6
 cryptography==49.0.0
 deprecation==2.1.0
