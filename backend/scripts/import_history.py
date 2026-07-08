@@ -46,7 +46,6 @@ def analyze_diary(content: str, date_str: str) -> tuple[list, int]:
             "keywords": ["關鍵字1", "關鍵字2", "陳政煒", "餅乾", "具體人事物"], // 🚨 請絕對排除「聊天、訊息、回覆、朋友、我」等無意義的通稱，只留下「專有名詞、具體人名、地名、獨特物件」！
             "emotion_score": 0到100的整數 (0是最負面悲傷，100是最快樂正面，50是平靜),
             "importance_weight": 1到5的整數 (1是最不重要，5是對人生影響重大),
-            "content_chunk": "與這個事件相關的日記原文段落（請保留原汁原味的金句或所有微小細節，不要刪減）",
             "diary_time": "如果日記中有提到具體時間（如：傍晚六點半、早上），請推斷轉換為 24 小時制的 HH:MM 字串（例如：18:30, 08:00）；如果完全沒提到時間，請填 null"
         }}
     ]
@@ -154,14 +153,14 @@ def parse_and_upload(file_path: str):
 
                 # 高細節向量化 (Rich Embedding)
                 # 組合：日期 + 主題 + 摘要 + 關鍵實體 + 原文段落
-                embedding_text = f"[{entry['date']}] 標籤:{event['topic']} - {event['summary']}。相關細節：{', '.join(event['keywords'])}。原文：{event.get('content_chunk', '')}"
+                embedding_text = f"[{entry['date']}] 標籤:{event['topic']} - {event['summary']}。相關細節：{', '.join(event['keywords'])}。原文：{entry['text']}"
                 print(f"   - 正在轉換「{event['topic']}」的 Embedding 向量...")
                 embedding = get_embedding(embedding_text)
                 
                 # 準備寫入資料庫的格式
                 row = {
                     "user_id": user_id,
-                    "content": event.get("content_chunk", ""),
+                    "content": entry['text'],  # 儲存原始日記全文，不使用 AI 改寫版本
                     "summary": event.get("summary", ""),
                     "topic": event.get("topic", "未分類"),
                     "keywords": event.get("keywords", []),

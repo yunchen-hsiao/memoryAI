@@ -16,7 +16,6 @@ interface SummarizedEvent {
   keywords: string[];
   emotion_score: number;
   importance_weight: number;
-  content_chunk: string;
   diary_date: string;
   diary_time: string;
   timezone?: string;
@@ -145,6 +144,12 @@ function App() {
   const handleArchive = async () => {
     if (!summarizedEvents) return;
 
+    // 重建完整對話原文作為 content，確保原始內容不被 AI 改寫版本取代
+    const fullChatText = messages.map(m => {
+      const role = m.role === 'user' ? '我' : 'AI';
+      return `${role}: ${m.content}`;
+    }).join('\n');
+
     try {
       for (const event of summarizedEvents) {
         await fetch(`${API_BASE}/api/memories`, {
@@ -161,7 +166,7 @@ function App() {
             emotion_score: event.emotion_score,
             importance_weight: event.importance_weight,
             keywords: event.keywords,
-            content: event.content_chunk,
+            content: fullChatText,  // 儲存完整對話原文，不使用 AI 改寫的 content_chunk
             timezone: event.timezone
           })
         });

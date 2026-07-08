@@ -535,7 +535,6 @@ def summarize_chat(request: ChatRequest, current_user = Depends(get_current_user
                 "keywords": ["具體人名", "地名", "獨特物件"],
                 "emotion_score": 0到100的整數 (0是最負面悲傷，100是最快樂正面，50是平靜),
                 "importance_weight": 1到5的整數,
-                "content_chunk": "與這個事件相關的對話重點或原汁原味的金句紀錄",
                 "diary_date": "{current_date}",
                 "diary_time": "{current_time}",
                 "timezone": "標準時區字串，例如 Pacific/Auckland，若未提及則填 Asia/Taipei"
@@ -740,7 +739,6 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
                 "keywords": ["具體人名", "地名", "獨特物件"], // 排除「聊天、訊息、朋友、我」等無意義通稱
                 "emotion_score": 0到100的整數 (0是最負面悲傷，100是最快樂正面，50是平靜),
                 "importance_weight": 1到5的整數 (1是最不重要，5是對人生影響重大),
-                "content_chunk": "與這個事件相關的日記原文段落（保留所有微小細節，不要刪減）",
                 "diary_time": "HH:MM 格式，若無則填 null",
                 "timezone": "標準時區字串，例如 Pacific/Auckland，若無則填 Asia/Taipei"
             }}
@@ -803,7 +801,8 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
 
         inserted_count = 0
         for event in real_events:
-            embedding_text = f"[{request.date_str}] 標籤:{event.get('topic','')} - {event.get('summary','')}。相關細節：{', '.join(event.get('keywords',[]))}。原文：{event.get('content_chunk', '')}"
+            # 使用原始日記全文而非 AI 生成的摘抄，確保原文完整保存
+            embedding_text = f"[{request.date_str}] 標籤:{event.get('topic','')} - {event.get('summary','')}。相關細節：{', '.join(event.get('keywords',[]))}。原文：{request.content}"
             embedding = get_embedding(embedding_text)
             
             data = {
@@ -816,7 +815,7 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
                 "keywords": [encrypt_text(k, current_user.email) for k in event.get("keywords", [])],
                 "emotion_score": event.get("emotion_score", 50),
                 "importance_weight": event.get("importance_weight", 3),
-                "content": encrypt_text(event.get("content_chunk", ""), current_user.email),
+                "content": encrypt_text(request.content, current_user.email),  # 儲存原始日記全文，不使用 AI 改寫版本
                 "embedding": embedding
             }
             supabase.table("memories").insert(data).execute()

@@ -86,7 +86,6 @@ def analyze_diary_with_context(content: str, date_str: str, life_context: str) -
             "keywords": ["具體人名", "地名", "獨特物件"], // 排除「聊天、訊息、朋友、我」等無意義通稱
             "emotion_score": 0到100的整數 (0是最負面悲傷，100是最快樂正面，50是平靜),
             "importance_weight": 1到5的整數 (1是最不重要，5是對人生影響重大),
-            "content_chunk": "與這個事件相關的日記原文段落（請保留原汁原味，不要刪減）",
             "diary_time": "HH:MM 格式，若無則填 null",
             "timezone": "標準時區字串，例如 Pacific/Auckland，若無則填 Asia/Taipei"
         }}
@@ -171,7 +170,7 @@ def main():
         exit(1)
 
     user_id = sys.argv[1]
-    diary_file = sys.argv[2] if len(sys.argv) > 2 else "日記.txt"
+    diary_file = sys.argv[2] if len(sys.argv) > 2 else "C:\\Users\\user\\memoryAI\\日記.txt"
 
     # 取得 user_email 用於加密
     try:
@@ -261,7 +260,7 @@ def main():
 
             # 將事件寫入資料庫
             for event in all_events:
-                embedding_text = f"[{date_str}] 標籤:{event.get('topic','')} - {event.get('summary','')}。相關細節：{', '.join(event.get('keywords',[]))}。原文：{event.get('content_chunk', '')}"
+                embedding_text = f"[{date_str}] 標籤:{event.get('topic','')} - {event.get('summary','')}。相關細節：{', '.join(event.get('keywords',[]))}。原文：{diary_text}"
                 embedding = get_embedding(embedding_text)
 
                 diary_time = event.get("diary_time")
@@ -286,7 +285,7 @@ def main():
                     "keywords": [encrypt_text(k, user_email) for k in event.get("keywords", [])],
                     "emotion_score": event.get("emotion_score", 50),
                     "importance_weight": event.get("importance_weight", 3),
-                    "content": encrypt_text(event.get("content_chunk", ""), user_email),
+                    "content": encrypt_text(diary_text, user_email),  # 儲存原始日記全文，不使用 AI 改寫版本
                     "embedding": embedding
                 }
                 supabase.table("memories").insert(data).execute()
