@@ -88,6 +88,13 @@ export default function Dashboard({ token }: DashboardProps) {
       });
   }, []);
 
+  // 頁面載入時自動抓取當月摘要（不強制重新生成，優先讀快取）
+  useEffect(() => {
+    if (token) {
+      fetchMonthlySummary(summaryYear, summaryMonth, false);
+    }
+  }, [token]);
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-4">
@@ -148,7 +155,7 @@ export default function Dashboard({ token }: DashboardProps) {
               style={{ background: 'linear-gradient(135deg, var(--color-m-accent1), var(--color-m-accent2))', color: 'white' }}
             >
               <Sparkles className="w-3.5 h-3.5" />
-              {summaryLoading ? '載入中...' : '查看回顧'}
+              {summaryLoading ? '生成中...' : '生成回顧'}
             </button>
             <button
               onClick={() => fetchMonthlySummary(summaryYear, summaryMonth, true)}
@@ -178,7 +185,7 @@ export default function Dashboard({ token }: DashboardProps) {
           </div>
         )}
         {!monthlySummary && !summaryLoading && (
-          <p className="text-sm py-4 text-center" style={{ color: 'var(--color-m-muted)' }}>選擇年月後，點擊「生成回顧」讓 AI 為您撰寫本月故事！</p>
+          <p className="text-sm py-4 text-center" style={{ color: 'var(--color-m-muted)' }}>這個月份還沒有任何記憶，或尚未生成回顧。選擇年月後點擊「生成回顧」。</p>
         )}
       </div>
 

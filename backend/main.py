@@ -655,8 +655,8 @@ def monthly_summary(year: int, month: int, force_regenerate: bool = False, curre
 
         {memories_text}
 
-        請用温暨、帶點文學性的文字，以第一人稱「我」，將這個月的所有事情織成一篇「本月處生故事小結」。
-        - 請突題重要的人物互動、情感線索、有趣的小事、或重要的皮處。
+        請用溫暖、帶點文學性的文字，以第一人稱「我」，將這個月的所有事情織成一篇「本月發生故事小結」。
+        - 請突顯重要的人物互動、情感線索、有趣的小事、或重要的亮點。
         - 如果有明顯的故事線索（如感情線、專案進展），請自然地織入。
         - 長度約 200-400 字，請用繁體中文寫作。
         - 直接回傳純文字內容，不要加標題。
@@ -669,8 +669,8 @@ def monthly_summary(year: int, month: int, force_regenerate: bool = False, curre
         )
         summary_text = response.message.content[0].text.strip()
         
-        # 存入快取
-        user_cache[user_id][cache_key] = encrypt_text(summary_text)
+        # 存入快取（用 user_email 加密後儲存）
+        user_cache[user_id][cache_key] = encrypt_text(summary_text, current_user.email)
         with open(CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(user_cache, f, ensure_ascii=False, indent=2)
             
