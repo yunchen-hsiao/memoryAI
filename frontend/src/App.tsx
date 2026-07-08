@@ -120,7 +120,7 @@ function App() {
     setIsSummarizing(true);
 
     try {
-      const res = await fetch(`${API_BASE}/api/summarize`, {
+      const res = await fetch(`${API_BASE}/api/chat/summarize`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
