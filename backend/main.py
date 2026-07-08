@@ -42,7 +42,7 @@ app.add_middleware(
 )
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = ""
     history: list[dict] = []
 
 @app.get("/api/health")
@@ -514,7 +514,9 @@ def summarize_chat(request: ChatRequest, current_user = Depends(get_current_user
         for msg in request.history:
             role = "AI" if msg['role'] == 'ai' or msg['role'] == 'model' else "我"
             chat_text += f"{role}: {msg['content']}\n"
-        chat_text += f"我: {request.message}\n"
+            
+        if request.message:
+            chat_text += f"我: {request.message}\n"
 
         # 讀取前情提要
         life_context = get_user_context(current_user.id)
