@@ -184,9 +184,15 @@ def main():
         user_res = supabase.auth.admin.get_user_by_id(user_id)
         user_email = user_res.user.email if user_res and user_res.user else ""
     except Exception as e:
-        print(f"⚠️ 無法取得使用者 Email: {e}")
-        user_email = ""
-    print(f"✅ 使用者: {user_email}")
+        print(f"⚠️ 無法透過 API 取得使用者 Email: {e}")
+        # 如果失敗，嘗試從 .env 讀取 ADMIN_EMAIL 作為 fallback
+        user_email = os.environ.get("ADMIN_EMAIL", "")
+
+    if not user_email:
+        print("❌ 錯誤：無法取得 Email 進行加密，請在 .env 中設定 ADMIN_EMAIL，或是檢查 Supabase Service Role Key。")
+        exit(1)
+        
+    print(f"✅ 使用者 Email (用於加密): {user_email}")
 
     # 讀取日記並按日期切割
     with open(diary_file, "r", encoding="utf-8") as f:
@@ -242,6 +248,21 @@ def main():
             paragraphs = diary_text.split('\n')
             curr_chunk = ""
             for p in paragraphs:
+                # 處理單一段落字數就超過 max_chunk_size 的極端情況（例如沒有換行的長文）
+                while len(p) > max_chunk_size:
+                    if curr_chunk:
+                        text_chunks.append(curr_chunk)
+                        curr_chunk = ""
+                    # 嘗試在接近 max_chunk_size 的地方尋找句號來完美切斷
+                    cut_idx = max_chunk_size
+                    for punct in ['。', '！', '？', '；', '.', '!', '?']:
+                        idx = p.rfind(punct, 0, max_chunk_size)
+                        if idx != -1:
+                            cut_idx = idx + 1
+                            break
+                    text_chunks.append(p[:cut_idx])
+                    p = p[cut_idx:]
+                    
                 if len(curr_chunk) + len(p) > max_chunk_size and curr_chunk:
                     text_chunks.append(curr_chunk)
                     curr_chunk = p + "\n"
@@ -305,9 +326,9 @@ def main():
                 print(f"   📝 前情提要已更新（前50字）：{current_context[:50]}...")
 
             # 避免觸發 Gemini 免費版 15 RPM (每分鐘15次) 的嚴格限制
-            # 加上呼叫 Embedding 的次數，建議每次處理完一天就硬性等待 6 秒
-            print(f"   ⏱️  (防 429) 等待 2 秒後繼續...")
-            time.sleep(2)
+            # 加上呼叫 Embedding 的次數，建議每次處理完一天就硬性等待 5 秒
+            print(f"   ⏱️  (防 429) 等待 5 秒後繼續...")
+            time.sleep(5)
 
         except Exception as e:
             print(f"\n   ❌ {date_str} 分析失敗：{e}")
