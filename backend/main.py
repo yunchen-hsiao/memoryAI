@@ -812,11 +812,23 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
             embedding_text = f"[{request.date_str}] 標籤:{event.get('topic','')} - {event.get('summary','')}。相關細節：{', '.join(event.get('keywords',[]))}。原文：{request.content}"
             embedding = get_embedding(embedding_text)
             
+            import re
+            diary_time = event.get("diary_time")
+            if diary_time == "null" or diary_time == "" or diary_time is None:
+                diary_time = None
+            else:
+                time_match = re.search(r"(\d{2}:\d{2})", str(diary_time))
+                diary_time = time_match.group(1) if time_match else None
+                
+            timezone = event.get("timezone")
+            if timezone == "null" or timezone == "":
+                timezone = None
+
             data = {
                 "user_id": current_user.id,
                 "diary_date": request.date_str,
-                "diary_time": event.get("diary_time"),
-                "timezone": event.get("timezone"),
+                "diary_time": diary_time,
+                "timezone": timezone,
                 "topic": encrypt_text(event.get("topic", ""), current_user.email),
                 "summary": encrypt_text(event.get("summary", ""), current_user.email),
                 "keywords": [encrypt_text(k, current_user.email) for k in event.get("keywords", [])],
