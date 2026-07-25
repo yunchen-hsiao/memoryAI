@@ -124,7 +124,8 @@ export default function Dashboard({ token }: DashboardProps) {
         </button>
       </div>
 
-      {/* 該月日記回顧 */}
+      {/* 該月日記回顧 (暫時隱藏) */}
+      {false && (
       <div className="rounded-2xl p-5" style={{ backgroundColor: 'var(--color-m-panel)', border: '1px solid var(--color-m-border)' }}>
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
           <div className="flex items-center gap-2">
@@ -188,6 +189,7 @@ export default function Dashboard({ token }: DashboardProps) {
           <p className="text-sm py-4 text-center" style={{ color: 'var(--color-m-muted)' }}>這個月份還沒有任何記憶，或尚未生成回顧。選擇年月後點擊「生成回顧」。</p>
         )}
       </div>
+      )}
 
       {/* Summary Stats Row */}
       {stats.summary_stats && (
