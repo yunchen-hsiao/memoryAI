@@ -99,6 +99,7 @@ def analyze_diary_with_context(content: str, date_str: str, life_context: str) -
     1. 絕對禁止將不同時間、不同場合發生的人事物合併！
     2. 如果日記寫「我跟A去了某地，後來遇到B」，在事件摘要中必須明確分開，絕對不能寫成「我跟A還有B一起去了某地」。
     3. summary 裡面提到的人物，必須嚴格對應到 involved_people 陣列裡的人物。如果他沒有參與該事件，嚴禁在 summary 中將他與該事件掛鉤！
+    4. 【JSON 格式嚴格要求】輸出 JSON 時，請務必正確處理特殊字元跳脫！特別是 `exact_quote` 中的內容，遇到雙引號 `"` 請替換為 `\\"`，遇到換行請替換為 `\\n`，絕對不能破壞 JSON 的合法性！
     
     如果整篇日記只有一個主題，就回傳兩個元素的陣列（一個事件 + 一個 __context_update__）。
     日記內容：
