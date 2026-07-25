@@ -771,7 +771,8 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
                 
                 response = co.chat(
                     model='command-r-08-2024',
-                    messages=[{"role": "user", "content": prompt}]
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=4000
                 )
                 
                 raw_text = response.message.content[0].text.strip()

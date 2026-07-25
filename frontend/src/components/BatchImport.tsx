@@ -21,8 +21,8 @@ export default function BatchImport({ token }: BatchImportProps) {
       return;
     }
 
-    // 簡單的 Regex 找出 YYYY-MM-DD 或 YYYY/MM/DD
-    const dateRegex = /^(\d{4}[/-]\d{1,2}[/-]\d{1,2})\s*$/gm;
+    // 簡單的 Regex 找出 YYYY-MM-DD 或 YYYY/MM/DD (允許前後空白)
+    const dateRegex = /^\s*(\d{4}[/-]\d{1,2}[/-]\d{1,2})\s*$/gm;
     const matches = Array.from(text.matchAll(dateRegex));
 
     if (matches.length === 0) {

@@ -11,7 +11,7 @@
 
 ### 1. 亦師亦友的 AI 幕僚
 
-搭載 Google Gemini 2.5 Flash 模型，AI 會在每次對話前，自動去大腦（資料庫）裡檢索與你對話相關的歷史記憶與人物設定。它記得你的朋友、你的煩惱，並且會用幽默、自然的人情味與你對話。
+搭載 Cohere (Command-R) 與 Google Gemini 雙引擎，AI 會在每次對話前，自動去大腦（資料庫）裡檢索與你對話相關的歷史記憶與人物設定。它記得你的朋友、你的煩惱，並且會用幽默、自然的人情味與你對話。
 
 ### 2. 記憶歸檔系統
 
@@ -53,8 +53,8 @@ RAG 系統的最強殺手鐧。當你跟 AI 聊完天、抱怨完之後，只需
 ### 後端 (Backend)
 
 - **核心框架**: FastAPI (Python) - 提供極速的非同步 API 介面。
-- **AI 模型**: Google GenAI SDK (`gemini-2.5-flash`) - 負責聊天、情緒分析、事件萃取、實體建模。
-- **向量生成**: `sentence-transformers` (`paraphrase-multilingual-MiniLM-L12-v2`) - 負責將繁體中文記憶轉化為 768 維的 Embedding 向量。
+- **文字生成模型**: Cohere SDK (`command-r-08-2024`) - 負責聊天、情緒分析、事件萃取、實體建模。
+- **向量生成模型**: Google GenAI SDK (`gemini-embedding-001`) - 負責將繁體中文記憶轉化為 768 維的 Embedding 向量。
 
 ### 資料庫 (Database)
 
@@ -72,6 +72,7 @@ RAG 系統的最強殺手鐧。當你跟 AI 聊完天、抱怨完之後，只需
 
 ```env
 GEMINI_API_KEY=your_gemini_api_key
+COHERE_API_KEY=your_cohere_api_key
 SUPABASE_URL=your_supabase_url
 SUPABASE_KEY=your_supabase_anon_key
 ENCRYPTION_KEY=your_fernet_encryption_key   # 負責將使用者日記加密成亂碼的專屬金鑰
@@ -105,6 +106,6 @@ npm run dev
 ## 系統架構亮點
 
 1. **Human-in-the-Loop (人機協作)**：記憶歸檔時，AI 只做草稿，最終由人類確認修改後再寫入資料庫，確保資料污染率降到最低。
-2. **自動錯誤重試 (Retry Mechanism)**：針對免費版 Gemini API 常見的 503 過載錯誤，後端已實作自動退避與重試機制，確保系統高可用性。
+2. **自動錯誤重試 (Retry Mechanism)**：針對免費版 API 常見的 429 (Rate Limit) 或 503 暫時不可用錯誤，後端已實作自動退避與重試機制，確保系統高可用性。
 3. **RWD 響應式設計**：完美支援手機與電腦瀏覽，無論是通勤時快速歸檔對話，或是坐在電腦前查看深度儀表板，都能獲得最佳體驗。
 4. **絕對的隱私防護**：結合 Supabase Auth JWT 身分驗證與 Python 後端應用層加密，確保使用者資料只為自己所用。
