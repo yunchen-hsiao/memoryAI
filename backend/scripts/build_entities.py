@@ -29,11 +29,12 @@ def build_entities():
     
     print(f"🚀 開始為用戶 {user_id} 執行「核心實體檔案編譯 (Entity Profiling)」...")
     
-    # 1. 抓取使用者的所有記憶
-    res = supabase.table("memories").select("id, summary, keywords, topic, diary_date").eq("user_id", user_id).execute()
+    # 1. 抓取使用者的所有記憶 (加入 content 提供更完整的上下文)
+    res = supabase.table("memories").select("id, summary, content, keywords, topic, diary_date").eq("user_id", user_id).execute()
     memories = res.data or []
     for m in memories:
         m['summary'] = decrypt_text(m.get('summary', ''))
+        m['content'] = decrypt_text(m.get('content', ''))
         m['topic'] = decrypt_text(m.get('topic', ''))
         m['keywords'] = [decrypt_text(k) for k in (m.get('keywords') or [])]
         
@@ -53,7 +54,8 @@ def build_entities():
             keyword_counts[kw] = keyword_counts.get(kw, 0) + 1
             if kw not in keyword_memories:
                 keyword_memories[kw] = []
-            keyword_memories[kw].append(f"[{m['diary_date']}] {m['summary']}")
+            # 使用完整的 content 讓 AI 有足夠的上下文判斷
+            keyword_memories[kw].append(f"[{m['diary_date']}] {m.get('content', m['summary'])}")
             
     # 3. 取出出現最多次的前 15 大實體
     # 設定門檻：至少要出現 2 次才算得上是「核心人物」
@@ -103,7 +105,9 @@ def build_entities():
                 profile = json.loads(response.text)
                 
                 if not profile.get("is_person", True):
-                    print(f"   ⏩ [{entity_name}] 不是人物，已自動略過。")
+                    print(f"   ⏩ [{entity_name}] 不是人物，已從圖譜中排除。")
+                    # 如果資料庫已經有這個「非人物」的誤判實體，順便把它刪除
+                    supabase.table("entities").delete().eq("name", entity_name).eq("user_id", user_id).execute()
                     break
                 
                 # 5. 寫入資料庫 (先檢查是否已存在，存在則更新，不存在則新增)
