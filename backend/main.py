@@ -534,6 +534,8 @@ def summarize_chat(request: ChatRequest, current_user = Depends(get_current_user
         請將每個獨立事件切割出來，並輸出為純 JSON 陣列 (Array) 格式（不要包含 ```json 標記）：
         [
             {{
+                "involved_people": ["真正參與此事件的具體人名"],
+                "exact_quote": "請從原文中完全『一字不漏』地擷取出與此事件對應的段落。絕對禁止改寫、總結或腦補！",
                 "summary": "一段約60字的精要總結（請統一使用第一人稱「我」，如有跨事件關聯請自然提及）",
                 "topic": "這個事件的主要標籤（簡短名詞）",
                 "keywords": ["具體人名", "地名", "獨特物件"],
@@ -546,6 +548,11 @@ def summarize_chat(request: ChatRequest, current_user = Depends(get_current_user
         ]
         最後，請在陣列的最後加上一個特殊物件：
         {{ "__context_update__": "根據今天發生的所有事情，請用繁體中文更新並補充「前情提要」。保持在300字以內，重點保留重要人物的現況、未完結的事件進展、使用者目前的情緒狀態與重要計畫。" }}
+        
+        【⚠️ 嚴格防幻覺與擷取警告】
+        1. 絕對禁止將不同時間、不同場合發生的人事物合併！
+        2. 如果對話寫「我跟A去了某地，後來遇到B」，在事件摘要中必須明確分開，絕對不能寫成「我跟A還有B一起去了某地」。
+        3. summary 裡面提到的人物，必須嚴格對應到 involved_people 陣列裡的人物。如果他沒有參與該事件，嚴禁在 summary 中將他與該事件掛鉤！
         
         對話紀錄：
         {chat_text}
@@ -740,6 +747,8 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
         請將每個獨立事件切割出來，提取豐富細節，並輸出為一個純 JSON 陣列 (Array) 格式（不要包含 ```json 等 Markdown 標記）：
         [
             {{
+                "involved_people": ["真正參與此事件的具體人名"],
+                "exact_quote": "請從原文中完全『一字不漏』地擷取出與此事件對應的段落。絕對禁止改寫、總結或腦補！",
                 "summary": "一段約60字的精要總結（請統一使用第一人稱「我」，如有跨事件關聯請自然提及）",
                 "topic": "這個事件的主要標籤（簡短名詞），例如：感情、專題討論、鋼琴社",
                 "keywords": ["具體人名", "地名", "獨特物件"], // 排除「聊天、訊息、朋友、我」等無意義通稱
@@ -751,6 +760,11 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
         ]
         最後，請在 JSON 陣列的最後加上一個特殊物件（作為最後一個元素）：
         {{ "__context_update__": "根據今天發生的所有事情，請用繁體中文更新並補充「前情提要」，請整合舊的前情提要內容，加入今天的新進展。保持在300字以內，重點保留重要人物的現況、未完結的事件進展、使用者目前的情緒狀態與重要計畫。\n【嚴重警告】絕對不可以竄改或替換任何人名！請完全照抄原文出現的名字，不要用同音字替換！" }}
+
+        【⚠️ 嚴格防幻覺與擷取警告】
+        1. 絕對禁止將不同時間、不同場合發生的人事物合併！
+        2. 如果日記寫「我跟A去了某地，後來遇到B」，在事件摘要中必須明確分開，絕對不能寫成「我跟A還有B一起去了某地」。
+        3. summary 裡面提到的人物，必須嚴格對應到 involved_people 陣列裡的人物。如果他沒有參與該事件，嚴禁在 summary 中將他與該事件掛鉤！
 
         如果整篇日記只有一個主題，就回傳兩個元素的陣列（一個事件 + 一個 __context_update__）。
         日記內容：
@@ -834,7 +848,7 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
                 "keywords": [encrypt_text(k, current_user.email) for k in event.get("keywords", [])],
                 "emotion_score": event.get("emotion_score", 50),
                 "importance_weight": event.get("importance_weight", 3),
-                "content": encrypt_text(request.content, current_user.email),  # 儲存原始日記全文，不使用 AI 改寫版本
+                "content": encrypt_text(event.get("exact_quote", request.content), current_user.email),  # 擷取單一事件的原文片段，不儲存一整天的全文
                 "embedding": embedding
             }
             supabase.table("memories").insert(data).execute()

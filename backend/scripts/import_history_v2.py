@@ -81,6 +81,8 @@ def analyze_diary_with_context(content: str, date_str: str, life_context: str) -
     請將每個獨立事件切割出來，提取豐富細節，並輸出為一個純 JSON 陣列格式（不要包含 ```json 等 Markdown 標記）：
     [
         {{
+            "involved_people": ["真正參與此事件的具體人名"], // 必須嚴格篩選，若某人物並未參與此事件，絕對不能放進來！
+            "exact_quote": "請從原文中完全『一字不漏』地擷取出與此事件對應的段落。絕對禁止改寫、總結或腦補！",
             "summary": "一段約60字的精要總結（請統一使用第一人稱「我」，如有跨事件關聯請自然提及）",
             "topic": "這個事件的主要標籤（簡短名詞），例如：感情、專題討論、紐西蘭旅遊",
             "keywords": ["具體人名", "地名", "獨特物件"], // 排除「聊天、訊息、朋友、我」等無意義通稱
@@ -93,6 +95,11 @@ def analyze_diary_with_context(content: str, date_str: str, life_context: str) -
     最後，請在 JSON 陣列的最後加上一個特殊物件（作為最後一個元素）：
     {{ "__context_update__": "根據今天發生的所有事情，請用繁體中文更新並補充「前情提要」，請整合舊的前情提要內容，加入今天的新進展。保持在300字以內，重點保留重要人物的現況、未完結的事件進展、使用者目前的情緒狀態與重要計畫。\n【嚴重警告】絕對不可以竄改或替換任何人名！請完全照抄原文出現的名字（例如：陳政煒、鄭旭宸等），不要用同音字替換！" }}
 
+    【⚠️ 嚴格防幻覺與擷取警告】
+    1. 絕對禁止將不同時間、不同場合發生的人事物合併！
+    2. 如果日記寫「我跟A去了某地，後來遇到B」，在事件摘要中必須明確分開，絕對不能寫成「我跟A還有B一起去了某地」。
+    3. summary 裡面提到的人物，必須嚴格對應到 involved_people 陣列裡的人物。如果他沒有參與該事件，嚴禁在 summary 中將他與該事件掛鉤！
+    
     如果整篇日記只有一個主題，就回傳兩個元素的陣列（一個事件 + 一個 __context_update__）。
     日記內容：
     {content}
@@ -285,7 +292,7 @@ def main():
                     "keywords": [encrypt_text(k, user_email) for k in event.get("keywords", [])],
                     "emotion_score": event.get("emotion_score", 50),
                     "importance_weight": event.get("importance_weight", 3),
-                    "content": encrypt_text(diary_text, user_email),  # 儲存原始日記全文，不使用 AI 改寫版本
+                    "content": encrypt_text(event.get("exact_quote", diary_text), user_email),  # 擷取單一事件的原文片段，不儲存一整天的全文
                     "embedding": embedding
                 }
                 supabase.table("memories").insert(data).execute()
@@ -299,8 +306,8 @@ def main():
 
             # 避免觸發 Gemini 免費版 15 RPM (每分鐘15次) 的嚴格限制
             # 加上呼叫 Embedding 的次數，建議每次處理完一天就硬性等待 6 秒
-            print(f"   ⏱️  (防 429) 等待 6 秒後繼續...")
-            time.sleep(6)
+            print(f"   ⏱️  (防 429) 等待 2 秒後繼續...")
+            time.sleep(2)
 
         except Exception as e:
             print(f"\n   ❌ {date_str} 分析失敗：{e}")

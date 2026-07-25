@@ -166,7 +166,7 @@ function App() {
             emotion_score: event.emotion_score,
             importance_weight: event.importance_weight,
             keywords: event.keywords,
-            content: fullChatText,  // 儲存完整對話原文，不使用 AI 改寫的 content_chunk
+            content: event.exact_quote || fullChatText,  // 優先使用精確擷取的片段，若無則儲存完整對話原文
             timezone: event.timezone
           })
         });
