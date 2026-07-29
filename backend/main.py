@@ -19,6 +19,14 @@ from supabase import create_client, Client
 load_dotenv()
 from security import encrypt_text, decrypt_text
 
+# 初始化 Neo4j 圖資料庫連線
+try:
+    from graph_db import sync_event_to_graph, get_full_graph, get_person_connections, get_co_mentioned_keywords
+    _neo4j_available = True
+except Exception as _e:
+    print(f"⚠️ Neo4j 模組載入失敗，圖資料庫功能將停用：{_e}")
+    _neo4j_available = False
+
 # Configure Supabase
 supabase_url = os.environ.get("SUPABASE_URL")
 supabase_key = os.environ.get("SUPABASE_KEY")
@@ -863,6 +871,44 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
         import traceback
         traceback.print_exc()
         return {"success": False, "error": str(e)}
+
+
+# ── 圖資料庫 API (Neo4j) ─────────────────────────────────────────────────
+
+@app.get("/api/graph")
+def get_graph_data(current_user = Depends(get_current_user)):
+    """Takes the full graph data from Neo4j for visualization."""
+    if not _neo4j_available:
+        return {"error": "Neo4j 圖資料庫目前不可用"}
+    try:
+        data = get_full_graph(str(current_user.id))
+        return {"success": True, **data}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/api/graph/person/{person_name}")
+def get_person_graph(person_name: str, current_user = Depends(get_current_user)):
+    """Query all events related to a specific person."""
+    if not _neo4j_available:
+        return {"error": "Neo4j 圖資料庫目前不可用"}
+    try:
+        events = get_person_connections(str(current_user.id), person_name)
+        co_mentions = get_co_mentioned_keywords(str(current_user.id), person_name)
+        return {"success": True, "events": events, "co_mentioned": co_mentions}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/api/graph/build")
+def trigger_build_graph(current_user = Depends(get_current_user)):
+    """觸發一次性歷史資料同步到 Neo4j"""
+    import subprocess
+    import sys
+    try:
+        subprocess.Popen([sys.executable, "scripts/build_graph.py", str(current_user.id)],
+                         cwd=os.path.dirname(os.path.abspath(__file__)))
+        return {"success": True, "message": "已觸發 Neo4j 圖資料庫同步！系統正在背景建立圖譜中，這可能需要幾分鐘。"}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.post("/api/entities/build")

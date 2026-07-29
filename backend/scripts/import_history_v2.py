@@ -28,6 +28,16 @@ client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 import cohere
 co = cohere.ClientV2(os.environ.get("COHERE_API_KEY"), timeout=300.0)
 
+# 初始化 Neo4j 圖資料庫連線
+try:
+    import sys as _sys
+    _sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from graph_db import sync_event_to_graph
+    _neo4j_available = True
+except Exception as _e:
+    print(f"⚠️ Neo4j 模組載入失敗，將跳過圖資料庫同步：{_e}")
+    _neo4j_available = False
+
 # ── 加密模組 (與 security.py 相同邏輯) ──────────────────────────────────────
 from cryptography.fernet import Fernet
 _fernet = Fernet(ENCRYPTION_KEY.encode()) if ENCRYPTION_KEY else None
@@ -316,8 +326,24 @@ def main():
                     "content": encrypt_text(event.get("exact_quote", diary_text), user_email),  # 擷取單一事件的原文片段，不儲存一整天的全文
                     "embedding": embedding
                 }
-                supabase.table("memories").insert(data).execute()
+                result = supabase.table("memories").insert(data).execute()
                 total_inserted += 1
+                
+                # 同步到 Neo4j 圖資料庫
+                if _neo4j_available and result.data:
+                    try:
+                        memory_id = str(result.data[0]["id"])
+                        sync_event_to_graph(
+                            user_id=user_id,
+                            memory_id=memory_id,
+                            date_str=date_str,
+                            topic=event.get("topic", ""),
+                            summary=event.get("summary", ""),
+                            keywords=event.get("keywords", []),
+                            emotion_score=event.get("emotion_score", 50)
+                        )
+                    except Exception as _ge:
+                        print(f"   ⚠️ Neo4j 同步失敗（不影響 Supabase）：{_ge}")
 
             # 更新滾動式前情提要
             if context_update:
