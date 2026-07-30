@@ -142,23 +142,17 @@ def get_full_graph(user_id: str) -> dict:
     """取得使用者完整的圖結構（供前端視覺化用）"""
     driver = get_driver()
     with driver.session() as session:
-        # 取得所有 Keyword 節點
+        # 取得所有 Keyword 節點（只抓有共現關係的，或常出現的）
         kw_result = session.run(
-            "MATCH (k:Keyword {user_id: $user_id}) RETURN k.name AS name, k.mention_count AS count",
-            user_id=user_id
-        )
-        nodes = [{"id": r["name"], "label": r["name"], "type": "keyword", "size": r["count"]} for r in kw_result]
-
-        # 取得所有 Event 節點（只取最近 50 個，避免過於複雜）
-        ev_result = session.run(
             """
-            MATCH (u:User {id: $user_id})-[:EXPERIENCED]->(e:Event)
-            RETURN e.id AS id, e.topic AS topic, e.summary AS summary, e.date AS date, e.emotion_score AS emotion
-            ORDER BY e.date DESC LIMIT 50
+            MATCH (k:Keyword {user_id: $user_id})
+            WHERE k.mention_count > 1
+            RETURN k.name AS name, k.mention_count AS count
+            ORDER BY count DESC LIMIT 80
             """,
             user_id=user_id
         )
-        event_nodes = [{"id": r["id"], "label": r["topic"], "type": "event", "summary": r["summary"], "date": r["date"], "emotion": r["emotion"]} for r in ev_result]
+        nodes = [{"id": r["name"], "label": r["name"], "type": "keyword", "size": r["count"]} for r in kw_result]
 
         # 取得所有 Keyword-Keyword 共現關係
         rel_result = session.run(
@@ -166,13 +160,13 @@ def get_full_graph(user_id: str) -> dict:
             MATCH (k1:Keyword {user_id: $user_id})<-[:MENTIONS]-(e:Event)-[:MENTIONS]->(k2:Keyword {user_id: $user_id})
             WHERE k1.name < k2.name
             RETURN k1.name AS source, k2.name AS target, count(*) AS weight
-            ORDER BY weight DESC LIMIT 100
+            ORDER BY weight DESC LIMIT 150
             """,
             user_id=user_id
         )
         links = [{"source": r["source"], "target": r["target"], "weight": r["weight"]} for r in rel_result]
 
         return {
-            "nodes": nodes + event_nodes,
+            "nodes": nodes,
             "links": links
         }

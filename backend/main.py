@@ -1,5 +1,5 @@
 import json
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -230,19 +230,28 @@ def chat(request: ChatRequest, current_user = Depends(get_current_user)):
             }
         ).execute()
         
-        # 2.5 實體 (Entity) 雙重檢索
+        # 2.5 實體 (Entity) 雙重檢索 + 圖譜 (GraphRAG)
         # 抓取目前資料庫中所有的核心實體檔案
         entities_res = supabase.table("entities").select("*").eq("user_id", current_user.id).execute()
         entity_context = ""
         if entities_res.data:
             mentioned_entities = [e for e in entities_res.data if e['name'] in request.message]
             if mentioned_entities:
-                entity_context = "\n【核心人物檔案 (Entity Profiles)】\n系統偵測到使用者提及了以下核心人物，請嚴格參考這些人設檔案來進行行為分析：\n"
+                entity_context = "\n【核心人物檔案與圖譜關聯 (GraphRAG Context)】\n系統偵測到使用者提及了以下核心人物，請參考他們的人設與圖譜關係：\n"
                 for e in mentioned_entities:
                     e['relationship'] = decrypt_text(e.get('relationship', ''))
                     e['description'] = decrypt_text(e.get('description', ''))
                     entity_context += f"👤 {e['name']} (關係：{e['relationship']})\n"
                     entity_context += f"   行為分析：{e['description']}\n"
+                    
+                    if _neo4j_available:
+                        try:
+                            co_keywords = get_co_mentioned_keywords(str(current_user.id), e['name'], limit=3)
+                            if co_keywords:
+                                names = [k['name'] for k in co_keywords]
+                                entity_context += f"   🔗 圖譜共現：最常與「{', '.join(names)}」一起出現在記憶中\n"
+                        except Exception as graph_e:
+                            print(f"Graph fetch error for {e['name']}: {graph_e}")
         
         # 3. 整理記憶上下文
         memory_context = ""
@@ -733,7 +742,7 @@ def update_user_context(user_id: str, new_context: str):
         print(f"⚠️ 更新 user_context 失敗: {e}")
 
 @app.post("/api/import/single")
-def import_single_day(request: ImportSingleRequest, current_user = Depends(get_current_user)):
+def import_single_day(request: ImportSingleRequest, background_tasks: BackgroundTasks, current_user = Depends(get_current_user)):
     try:
         # 1. 檢查這天是否已有資料（避免重複匯入）
         existing = supabase.table('memories').select('id').eq('diary_date', request.date_str).eq('user_id', current_user.id).limit(1).execute()
@@ -767,7 +776,7 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
             }}
         ]
         最後，請在 JSON 陣列的最後加上一個特殊物件（作為最後一個元素）：
-        {{ "__context_update__": "根據今天發生的所有事情，請用繁體中文更新並補充「前情提要」，請整合舊的前情提要內容，加入今天的新進展。保持在300字以內，重點保留重要人物的現況、未完結的事件進展、使用者目前的情緒狀態與重要計畫。\n【嚴重警告】絕對不可以竄改或替換任何人名！請完全照抄原文出現的名字，不要用同音字替換！" }}
+        {{ "__context_update__": "根據今天發生的所有事情，請用繁體中文更新並補充「前情提要」，請整合舊的前情提要內容，加入今天的新進展。請使用第一人稱「我」的視角來撰寫。保持在300字以內，重點保留重要人物的現況、未完結的事件進展、使用者目前的情緒狀態與重要計畫。\n【嚴重警告】絕對不可以竄改或替換任何人名！請完全照抄原文出現的名字，不要用同音字替換！" }}
 
         【⚠️ 嚴格防幻覺與擷取警告】
         1. 絕對禁止將不同時間、不同場合發生的人事物合併！
@@ -853,14 +862,28 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
                 "timezone": timezone,
                 "topic": encrypt_text(event.get("topic", ""), current_user.email),
                 "summary": encrypt_text(event.get("summary", ""), current_user.email),
-                "keywords": [encrypt_text(k, current_user.email) for k in event.get("keywords", [])],
+                "keywords": [encrypt_text(k, current_user.email) for k in event.get("keywords", []) if k not in ["蕭筠蓁", "我", "自己"]],
                 "emotion_score": event.get("emotion_score", 50),
                 "importance_weight": event.get("importance_weight", 3),
                 "content": encrypt_text(event.get("exact_quote", request.content), current_user.email),  # 擷取單一事件的原文片段，不儲存一整天的全文
                 "embedding": embedding
             }
-            supabase.table("memories").insert(data).execute()
+            res = supabase.table("memories").insert(data).execute()
             inserted_count += 1
+            
+            # 將事件同步至圖資料庫（放在背景執行，不卡住前端體驗）
+            if _neo4j_available and res.data:
+                memory_id = res.data[0].get("id")
+                background_tasks.add_task(
+                    sync_event_to_graph,
+                    str(current_user.id),
+                    str(memory_id),
+                    request.date_str,
+                    event.get("topic", ""),
+                    event.get("summary", ""),
+                    [k for k in event.get("keywords", []) if k not in ["蕭筠蓁", "我", "自己"]],
+                    event.get("emotion_score", 50)
+                )
 
         # 5. 更新使用者的全局脈絡
         if context_update:

@@ -31,13 +31,25 @@ export default function MemoryGraph({ token }: { token: string | null }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/dashboard/graph`, {
+    fetch(`${API_BASE}/api/graph`, {
       headers: token ? { 'Authorization': `Bearer ${token}` } : {}
     })
       .then(res => res.json())
       .then(fetchedData => {
-        if (fetchedData && fetchedData.nodes && fetchedData.links) {
-          setData(fetchedData);
+        if (fetchedData && fetchedData.success) {
+          // 轉換 Neo4j 的資料格式以符合 ForceGraph2D
+          const mappedNodes = fetchedData.nodes.map((n: any) => ({
+            id: n.id,
+            name: n.label,
+            group: 'entity',
+            val: n.size
+          }));
+          const mappedLinks = fetchedData.links.map((l: any) => ({
+            source: l.source,
+            target: l.target,
+            value: l.weight
+          }));
+          setData({ nodes: mappedNodes, links: mappedLinks });
         } else {
           console.error("Graph fetch invalid data:", fetchedData);
         }
@@ -143,12 +155,11 @@ export default function MemoryGraph({ token }: { token: string | null }) {
   useEffect(() => {
     // 調整引力引擎，讓節點互相排斥得更遠，並拉長連線距離
     if (fgRef.current) {
-      // 針對「核心人物/事物」給予極大的排斥力 (-1500)，讓它們一開始就會強烈互相彈開
-      // 一般的記憶行星則維持 -250 的排斥力
-      fgRef.current.d3Force('charge').strength((node: any) => {
-        return node.group === 'entity' ? -1500 : -250;
-      });
-      fgRef.current.d3Force('link').distance(100);
+      // 調整引力引擎，因為現在只有人物節點，稍微拉近距離
+      if (fgRef.current) {
+        fgRef.current.d3Force('charge').strength(-800);
+        fgRef.current.d3Force('link').distance(150);
+      }
     }
   }, [data]);
 
@@ -186,15 +197,7 @@ export default function MemoryGraph({ token }: { token: string | null }) {
       <div className="absolute bottom-4 left-4 backdrop-blur-md p-3 rounded-xl flex flex-col gap-2 text-xs" style={{ backgroundColor: 'rgba(35, 41, 49, 0.8)', border: '1px solid #353e49' }}>
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded-full bg-slate-50 shadow-[0_0_12px_rgba(248,250,252,1)]"></div>
-          <span style={{ color: '#e2e8f0' }}>核心人物 / 事物</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-blue-400 opacity-80"></div>
-          <span style={{ color: '#94a3b8' }}>正向記憶</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-rose-500 opacity-80"></div>
-          <span style={{ color: '#94a3b8' }}>負向記憶</span>
+          <span style={{ color: '#e2e8f0' }}>人物與主題關聯</span>
         </div>
       </div>
 

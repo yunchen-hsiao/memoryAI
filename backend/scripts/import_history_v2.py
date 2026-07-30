@@ -103,7 +103,7 @@ def analyze_diary_with_context(content: str, date_str: str, life_context: str) -
         }}
     ]
     最後，請在 JSON 陣列的最後加上一個特殊物件（作為最後一個元素）：
-    {{ "__context_update__": "根據今天發生的所有事情，請用繁體中文更新並補充「前情提要」，請整合舊的前情提要內容，加入今天的新進展。保持在300字以內，重點保留重要人物的現況、未完結的事件進展、使用者目前的情緒狀態與重要計畫。\n【嚴重警告】絕對不可以竄改或替換任何人名！請完全照抄原文出現的名字（例如：陳政煒、鄭旭宸等），不要用同音字替換！" }}
+    {{ "__context_update__": "根據今天發生的所有事情，請用繁體中文更新並補充「前情提要」，請整合舊的前情提要內容，加入今天的新進展。請使用第一人稱「我」的視角來撰寫。保持在300字以內，重點保留重要人物的現況、未完結的事件進展、使用者目前的情緒狀態與重要計畫。\n【嚴重警告】絕對不可以竄改或替換任何人名！請完全照抄原文出現的名字（例如：陳政煒、鄭旭宸等），不要用同音字替換！" }}
 
     【⚠️ 嚴格防幻覺與擷取警告】
     1. 絕對禁止將不同時間、不同場合發生的人事物合併！
@@ -320,7 +320,7 @@ def main():
                     "timezone": timezone,
                     "topic": encrypt_text(event.get("topic", ""), user_email),
                     "summary": encrypt_text(event.get("summary", ""), user_email),
-                    "keywords": [encrypt_text(k, user_email) for k in event.get("keywords", [])],
+                    "keywords": [encrypt_text(k, user_email) for k in event.get("keywords", []) if k not in ["蕭筠蓁", "我", "自己"]],
                     "emotion_score": event.get("emotion_score", 50),
                     "importance_weight": event.get("importance_weight", 3),
                     "content": encrypt_text(event.get("exact_quote", diary_text), user_email),  # 擷取單一事件的原文片段，不儲存一整天的全文
@@ -339,7 +339,7 @@ def main():
                             date_str=date_str,
                             topic=event.get("topic", ""),
                             summary=event.get("summary", ""),
-                            keywords=event.get("keywords", []),
+                            keywords=[k for k in event.get("keywords", []) if k not in ["蕭筠蓁", "我", "自己"]],
                             emotion_score=event.get("emotion_score", 50)
                         )
                     except Exception as _ge:
