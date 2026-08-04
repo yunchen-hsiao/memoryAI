@@ -1,5 +1,5 @@
 import json
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -19,6 +19,17 @@ from supabase import create_client, Client
 load_dotenv()
 from security import encrypt_text, decrypt_text
 
+# 初始化 Neo4j 圖資料庫連線
+try:
+    from graph_db import sync_event_to_graph, get_full_graph, get_person_connections, get_co_mentioned_keywords
+    _neo4j_available = True
+except Exception as _e:
+    print(f"⚠️ Neo4j 模組載入失敗，圖資料庫功能將停用：{_e}")
+    _neo4j_available = False
+
+from services.entity_resolver import resolve_mentioned_entities
+from services.entity_profile_service import update_entity_profiles
+
 # Configure Supabase
 supabase_url = os.environ.get("SUPABASE_URL")
 supabase_key = os.environ.get("SUPABASE_KEY")
@@ -33,9 +44,21 @@ if not gemini_api_key:
 app = FastAPI(title="MemoryAI API")
 
 # Configure CORS
+# 瀏覽器規範不允許 allow_origins=["*"] 搭配 allow_credentials=True，
+# 因此改用白名單機制。預設包含本機開發網址，正式環境網域請在 .env 的
+# ALLOWED_ORIGINS 中設定（用逗號分隔多個網址，例如：
+# ALLOWED_ORIGINS=https://your-app.vercel.app,https://your-domain.com）
+_default_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+_extra_origins = [
+    origin.strip()
+    for origin in os.environ.get("ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+allowed_origins = list(dict.fromkeys(_default_origins + _extra_origins))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -44,6 +67,21 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     message: str = ""
     history: list[dict] = []
+
+# 情緒分數評分準則：統一給所有 AI 抽取事件的 prompt 使用，
+# 避免 AI 僅依「事件表面敘述是否熱烈」機械式地打在 50 分附近，
+# 而忽略使用者對特定人物/情境的主觀好感與期待感。
+EMOTION_SCORE_GUIDE = """0到100的整數，請根據「使用者當下主觀感受到的正負向程度」評分，
+        不是旁觀者對事件表面看起來熱烈與否的客觀判斷。校準參考：
+          - 0-30：明顯負面（難過、生氣、失落、衝突、被忽略）
+          - 40-60：平靜中性的日常瑣事，沒有明顯情緒起伏
+          - 65-85：正面、開心、期待、有好感、感到被重視、享受互動
+          - 85-100：非常快樂、興奮、重要的正面時刻
+        ⚠️ 特別注意：如果使用者對某人有好感、喜歡、在意，即使對話內容表面平淡
+        （例如只是一句閒聊訊息），只要使用者展現出期待、開心、投入或享受互動的語氣，
+        都應給予偏高分數（65分以上），不要因為文字表面「看起來只是普通對話」而
+        機械式地打 50 分左右。反之，若使用者明確表達失望、冷淡或不耐，也不要因為
+        語氣平和就打高分。"""
 
 @app.get("/api/health")
 def health_check():
@@ -207,40 +245,79 @@ def get_embedding(text: str) -> list[float]:
 @app.post("/api/chat")
 def chat(request: ChatRequest, current_user = Depends(get_current_user)):
     try:
-        # 1. 將使用者的問題轉成向量
-        query_embedding = get_embedding(request.message)
-        
-        # 2. 向 Supabase 進行時間衰減相似度搜尋
-        search_results = supabase.rpc(
-            'search_memories', 
-            {
-                'query_embedding': query_embedding,
-                'match_threshold': 0.4, # 相似度門檻
-                'match_count': 5,      # 最多取 5 筆最相關的
-                'p_user_id': current_user.id, # 確保只搜尋自己的記憶
-                'time_weight_factor': 0.2 # 時間衰減權重 (0.2 表示輕微偏好近期的記憶)
-            }
-        ).execute()
-        
-        # 2.5 實體 (Entity) 雙重檢索
-        # 抓取目前資料庫中所有的核心實體檔案
+        # 1. 抓取並解密目前所有的核心實體檔案，同時做人物解析
         entities_res = supabase.table("entities").select("*").eq("user_id", current_user.id).execute()
-        entity_context = ""
-        if entities_res.data:
-            mentioned_entities = [e for e in entities_res.data if e['name'] in request.message]
-            if mentioned_entities:
-                entity_context = "\n【核心人物檔案 (Entity Profiles)】\n系統偵測到使用者提及了以下核心人物，請嚴格參考這些人設檔案來進行行為分析：\n"
+        all_entities = entities_res.data or []
+        for e in all_entities:
+            e['relationship'] = decrypt_text(e.get('relationship', ''))
+            e['description'] = decrypt_text(e.get('description', ''))
+            # aliases 為明文陣列，不需解密；name 本身也一直是明文
+
+        mentioned_entities = resolve_mentioned_entities(request.message, all_entities)
+
+        # 2. 圖優先檢索：命中人物時，用 Neo4j 圖譜鎖定該人物相關的 memory_id 範圍，
+        #    避免不同人物的相似情境事件互相混淆；沒命中或圖查詢失敗則 fallback 至全域向量搜尋。
+        search_results_data = []
+        used_graph = False
+
+        if mentioned_entities and _neo4j_available:
+            try:
+                seen_ids = set()
                 for e in mentioned_entities:
-                    e['relationship'] = decrypt_text(e.get('relationship', ''))
-                    e['description'] = decrypt_text(e.get('description', ''))
-                    entity_context += f"👤 {e['name']} (關係：{e['relationship']})\n"
-                    entity_context += f"   行為分析：{e['description']}\n"
-        
+                    connections = get_person_connections(str(current_user.id), e['name'], limit=30)
+                    for c in connections:
+                        mem_id = c.get('memory_id')
+                        if mem_id:
+                            seen_ids.add(mem_id)
+
+                if seen_ids:
+                    mem_res = supabase.table("memories").select("id, summary, topic, diary_date, diary_time") \
+                        .eq("user_id", current_user.id) \
+                        .in_("id", list(seen_ids)) \
+                        .order("diary_date", desc=True) \
+                        .limit(20).execute()
+                    search_results_data = mem_res.data or []
+                    used_graph = True
+            except Exception as graph_e:
+                print(f"⚠️ Graph 查詢失敗，fallback 至向量搜尋: {graph_e}")
+
+        if not used_graph:
+            # 全域向量相似度搜尋（未命中人物，或圖查詢失敗/查無結果時的 fallback）
+            query_embedding = get_embedding(request.message)
+            search_results = supabase.rpc(
+                'search_memories',
+                {
+                    'query_embedding': query_embedding,
+                    'match_threshold': 0.4, # 相似度門檻
+                    'match_count': 5,      # 最多取 5 筆最相關的
+                    'p_user_id': current_user.id, # 確保只搜尋自己的記憶
+                    'time_weight_factor': 0.2 # 時間衰減權重 (0.2 表示輕微偏好近期的記憶)
+                }
+            ).execute()
+            search_results_data = search_results.data or []
+
+        # 2.5 核心人物檔案與圖譜共現關聯（GraphRAG Context）
+        entity_context = ""
+        if mentioned_entities:
+            entity_context = "\n【核心人物檔案與圖譜關聯 (GraphRAG Context)】\n系統偵測到使用者提及了以下核心人物，請參考他們的人設與圖譜關係：\n"
+            for e in mentioned_entities:
+                entity_context += f"👤 {e['name']} (關係：{e['relationship']})\n"
+                entity_context += f"   行為分析：{e['description']}\n"
+
+                if _neo4j_available:
+                    try:
+                        co_keywords = get_co_mentioned_keywords(str(current_user.id), e['name'], limit=3)
+                        if co_keywords:
+                            names = [k['name'] for k in co_keywords]
+                            entity_context += f"   🔗 圖譜共現：最常與「{', '.join(names)}」一起出現在記憶中\n"
+                    except Exception as graph_e:
+                        print(f"Graph fetch error for {e['name']}: {graph_e}")
+
         # 3. 整理記憶上下文
         memory_context = ""
-        if search_results.data and len(search_results.data) > 0:
+        if search_results_data:
             memory_context = "【系統擷取到的相關歷史記憶】\n"
-            for mem in search_results.data:
+            for mem in search_results_data:
                 mem['summary'] = decrypt_text(mem.get('summary', ''))
                 mem['topic'] = decrypt_text(mem.get('topic', ''))
                 time_str = f" {mem.get('diary_time', '')}" if mem.get('diary_time') else ""
@@ -539,7 +616,7 @@ def summarize_chat(request: ChatRequest, current_user = Depends(get_current_user
                 "summary": "一段約60字的精要總結（請統一使用第一人稱「我」，如有跨事件關聯請自然提及）",
                 "topic": "這個事件的主要標籤（簡短名詞）",
                 "keywords": ["具體人名", "地名", "獨特物件"],
-                "emotion_score": 0到100的整數 (0是最負面悲傷，100是最快樂正面，50是平靜),
+                "emotion_score": {EMOTION_SCORE_GUIDE},
                 "importance_weight": 1到5的整數,
                 "diary_date": "{current_date}",
                 "diary_time": "{current_time}",
@@ -726,7 +803,7 @@ def update_user_context(user_id: str, new_context: str):
         print(f"⚠️ 更新 user_context 失敗: {e}")
 
 @app.post("/api/import/single")
-def import_single_day(request: ImportSingleRequest, current_user = Depends(get_current_user)):
+def import_single_day(request: ImportSingleRequest, background_tasks: BackgroundTasks, current_user = Depends(get_current_user)):
     try:
         # 1. 檢查這天是否已有資料（避免重複匯入）
         existing = supabase.table('memories').select('id').eq('diary_date', request.date_str).eq('user_id', current_user.id).limit(1).execute()
@@ -753,14 +830,14 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
                 "summary": "一段約60字的精要總結（請統一使用第一人稱「我」，如有跨事件關聯請自然提及）",
                 "topic": "這個事件的主要標籤（簡短名詞），例如：感情、專題討論、鋼琴社",
                 "keywords": ["具體人名", "地名", "獨特物件"], // 排除「聊天、訊息、朋友、我」等無意義通稱
-                "emotion_score": 0到100的整數 (0是最負面悲傷，100是最快樂正面，50是平靜),
+                "emotion_score": {EMOTION_SCORE_GUIDE},
                 "importance_weight": 1到5的整數 (1是最不重要，5是對人生影響重大),
                 "diary_time": "HH:MM 格式，若無則填 null",
                 "timezone": "標準時區字串，例如 Pacific/Auckland，若無則填 Asia/Taipei"
             }}
         ]
         最後，請在 JSON 陣列的最後加上一個特殊物件（作為最後一個元素）：
-        {{ "__context_update__": "根據今天發生的所有事情，請用繁體中文更新並補充「前情提要」，請整合舊的前情提要內容，加入今天的新進展。保持在300字以內，重點保留重要人物的現況、未完結的事件進展、使用者目前的情緒狀態與重要計畫。\n【嚴重警告】絕對不可以竄改或替換任何人名！請完全照抄原文出現的名字，不要用同音字替換！" }}
+        {{ "__context_update__": "根據今天發生的所有事情，請用繁體中文更新並補充「前情提要」，請整合舊的前情提要內容，加入今天的新進展。請使用第一人稱「我」的視角來撰寫。保持在300字以內，重點保留重要人物的現況、未完結的事件進展、使用者目前的情緒狀態與重要計畫。\n【嚴重警告】絕對不可以竄改或替換任何人名！請完全照抄原文出現的名字，不要用同音字替換！" }}
 
         【⚠️ 嚴格防幻覺與擷取警告】
         1. 絕對禁止將不同時間、不同場合發生的人事物合併！
@@ -847,19 +924,50 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
                 "timezone": timezone,
                 "topic": encrypt_text(event.get("topic", ""), current_user.email),
                 "summary": encrypt_text(event.get("summary", ""), current_user.email),
-                "keywords": [encrypt_text(k, current_user.email) for k in event.get("keywords", [])],
+                "keywords": [encrypt_text(k, current_user.email) for k in event.get("keywords", []) if k not in ["蕭筠蓁", "我", "自己"]],
                 "emotion_score": event.get("emotion_score", 50),
                 "importance_weight": event.get("importance_weight", 3),
                 "content": encrypt_text(event.get("exact_quote", request.content), current_user.email),  # 擷取單一事件的原文片段，不儲存一整天的全文
                 "embedding": embedding
             }
-            supabase.table("memories").insert(data).execute()
+            res = supabase.table("memories").insert(data).execute()
             inserted_count += 1
+            
+            # 將事件同步至圖資料庫（放在背景執行，不卡住前端體驗）
+            # 注意：只同步結構化資訊（人物關聯、日期、分數），不寫入 topic/summary 內容明文
+            if _neo4j_available and res.data:
+                memory_id = res.data[0].get("id")
+                background_tasks.add_task(
+                    sync_event_to_graph,
+                    str(current_user.id),
+                    str(memory_id),
+                    request.date_str,
+                    [k for k in event.get("keywords", []) if k not in ["蕭筠蓁", "我", "自己"]],
+                    event.get("emotion_score", 50),
+                    event.get("importance_weight", 3)
+                )
 
         # 5. 更新使用者的全局脈絡
         if context_update:
             update_user_context(current_user.id, context_update)
-            
+
+        # 6. 背景局部更新本次匯入事件中提到的人物檔案（不重跑全庫，只處理本次提到的人）
+        mentioned_names = set()
+        for event in real_events:
+            mentioned_names.update(
+                k for k in event.get("keywords", []) if k not in ["蕭筠蓁", "我", "自己"]
+            )
+        if mentioned_names:
+            started = _start_background_function_job(
+                str(current_user.id),
+                "entity_profile",
+                update_entity_profiles,
+                str(current_user.id),
+                list(mentioned_names)
+            )
+            if not started:
+                print(f"⏭️ 使用者 {current_user.id} 的人物檔案更新任務已在執行中，本次跳過。")
+
         return {"success": True, "inserted_count": inserted_count}
     except Exception as e:
         import traceback
@@ -867,13 +975,144 @@ def import_single_day(request: ImportSingleRequest, current_user = Depends(get_c
         return {"success": False, "error": str(e)}
 
 
+# ── 圖資料庫 API (Neo4j) ─────────────────────────────────────────────────
+
+@app.get("/api/graph")
+def get_graph_data(current_user = Depends(get_current_user)):
+    """Takes the full graph data from Neo4j for visualization."""
+    if not _neo4j_available:
+        return {"error": "Neo4j 圖資料庫目前不可用"}
+    try:
+        data = get_full_graph(str(current_user.id))
+        return {"success": True, **data}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/api/graph/person/{person_name}")
+def get_person_graph(person_name: str, current_user = Depends(get_current_user)):
+    """Query all events related to a specific person."""
+    if not _neo4j_available:
+        return {"error": "Neo4j 圖資料庫目前不可用"}
+    try:
+        # Neo4j 只回傳結構化資訊（memory_id, date, emotion_score, importance_weight），
+        # 不含事件內容明文，需回 Supabase 依 memory_id 查詢並解密取得實際內容。
+        connections = get_person_connections(str(current_user.id), person_name)
+        memory_ids = [c["memory_id"] for c in connections if c.get("memory_id")]
+
+        events = []
+        if memory_ids:
+            res = supabase.table("memories").select("id, diary_date, diary_time, topic, summary, emotion_score, importance_weight") \
+                .eq("user_id", current_user.id) \
+                .in_("id", memory_ids) \
+                .execute()
+            memories_by_id = {str(m["id"]): m for m in (res.data or [])}
+            for c in connections:
+                m = memories_by_id.get(str(c.get("memory_id")))
+                if not m:
+                    continue
+                events.append({
+                    "date": m.get("diary_date"),
+                    "topic": decrypt_text(m.get("topic", "")),
+                    "summary": decrypt_text(m.get("summary", "")),
+                    "emotion_score": m.get("emotion_score"),
+                    "importance_weight": m.get("importance_weight"),
+                })
+
+        co_mentions = get_co_mentioned_keywords(str(current_user.id), person_name)
+        return {"success": True, "events": events, "co_mentioned": co_mentions}
+    except Exception as e:
+        return {"error": str(e)}
+
+# --- 背景腳本併發保護 ---
+# 避免同一個使用者對同一種背景任務（圖譜同步 / 實體編譯）連續觸發多個行程同時執行，
+# 造成 Neo4j / Supabase / Gemini API 的資源競爭。
+# 注意：此鎖僅存在於單一 Python 行程的記憶體中，若後端以多個 worker 行程部署
+# （例如 uvicorn --workers > 1 或多台伺服器），無法跨行程互相保護，屆時需改用
+# Redis 或資料庫作為共享鎖。
+import subprocess
+import threading
+
+_running_jobs: set[tuple[str, str]] = set()
+_jobs_lock = threading.Lock()
+
+def _start_background_job(user_id: str, job_type: str, cmd: list[str], cwd: str | None = None) -> bool:
+    """嘗試啟動一個背景任務（獨立子行程）。若該使用者的同類任務已在執行中，回傳 False 並不會啟動新行程。"""
+    key = (user_id, job_type)
+    with _jobs_lock:
+        if key in _running_jobs:
+            return False
+        _running_jobs.add(key)
+
+    def _run():
+        try:
+            proc = subprocess.Popen(cmd, cwd=cwd)
+            proc.wait()
+        except Exception as e:
+            print(f"⚠️ 背景任務執行失敗 ({job_type}, user={user_id}): {e}")
+        finally:
+            with _jobs_lock:
+                _running_jobs.discard(key)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return True
+
+
+def _start_background_function_job(user_id: str, job_type: str, func, *args, **kwargs) -> bool:
+    """
+    嘗試啟動一個背景任務（同行程內直接呼叫 Python 函式，而非 subprocess）。
+    沿用與 _start_background_job 相同的 (_jobs_lock, _running_jobs) 併發保護語意，
+    適合輕量、不需要獨立子行程隔離的任務（例如局部更新人物檔案）。
+    若該使用者的同類任務已在執行中，回傳 False 並不會啟動新任務。
+    """
+    key = (user_id, job_type)
+    with _jobs_lock:
+        if key in _running_jobs:
+            return False
+        _running_jobs.add(key)
+
+    def _run():
+        try:
+            func(*args, **kwargs)
+        except Exception as e:
+            print(f"⚠️ 背景任務執行失敗 ({job_type}, user={user_id}): {e}")
+        finally:
+            with _jobs_lock:
+                _running_jobs.discard(key)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return True
+
+
+@app.post("/api/graph/build")
+def trigger_build_graph(current_user = Depends(get_current_user)):
+    """觸發一次性歷史資料同步到 Neo4j"""
+    import sys
+    try:
+        started = _start_background_job(
+            str(current_user.id),
+            "graph",
+            [sys.executable, "scripts/build_graph.py", str(current_user.id)],
+            cwd=os.path.dirname(os.path.abspath(__file__))
+        )
+        if not started:
+            return {"success": False, "message": "Neo4j 圖資料庫同步已在進行中，請等待完成後再試一次。"}
+        return {"success": True, "message": "已觸發 Neo4j 圖資料庫同步！系統正在背景建立圖譜中，這可能需要幾分鐘。"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.post("/api/entities/build")
 def trigger_build_entities(current_user = Depends(get_current_user)):
-    import subprocess
     import sys
     try:
         # 使用 sys.executable 確保背景執行時是使用當前 venv 的 python
-        subprocess.Popen([sys.executable, "scripts/build_entities.py", str(current_user.id)])
+        started = _start_background_job(
+            str(current_user.id),
+            "entities",
+            [sys.executable, "scripts/build_entities.py", str(current_user.id)]
+        )
+        if not started:
+            return {"success": False, "message": "核心人物檔案編譯已在進行中，請等待完成後再試一次。"}
         return {"success": True, "message": "已成功觸發核心人物檔案編譯！系統正在背景努力更新大腦中。"}
     except Exception as e:
         return {"error": str(e)}

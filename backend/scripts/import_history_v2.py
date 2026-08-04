@@ -28,6 +28,31 @@ client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 import cohere
 co = cohere.ClientV2(os.environ.get("COHERE_API_KEY"), timeout=300.0)
 
+# 情緒分數評分準則：與 main.py 的 EMOTION_SCORE_GUIDE 保持一致，
+# 避免 AI 僅依「事件表面敘述是否熱烈」機械式地打在 50 分附近，
+# 而忽略使用者對特定人物/情境的主觀好感與期待感。
+EMOTION_SCORE_GUIDE = """0到100的整數，請根據「使用者當下主觀感受到的正負向程度」評分，
+        不是旁觀者對事件表面看起來熱烈與否的客觀判斷。校準參考：
+          - 0-30：明顯負面（難過、生氣、失落、衝突、被忽略）
+          - 40-60：平靜中性的日常瑣事，沒有明顯情緒起伏
+          - 65-85：正面、開心、期待、有好感、感到被重視、享受互動
+          - 85-100：非常快樂、興奮、重要的正面時刻
+        ⚠️ 特別注意：如果使用者對某人有好感、喜歡、在意，即使對話內容表面平淡
+        （例如只是一句閒聊訊息），只要使用者展現出期待、開心、投入或享受互動的語氣，
+        都應給予偏高分數（65分以上），不要因為文字表面「看起來只是普通對話」而
+        機械式地打 50 分左右。反之，若使用者明確表達失望、冷淡或不耐，也不要因為
+        語氣平和就打高分。"""
+
+# 初始化 Neo4j 圖資料庫連線
+try:
+    import sys as _sys
+    _sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from graph_db import sync_event_to_graph
+    _neo4j_available = True
+except Exception as _e:
+    print(f"⚠️ Neo4j 模組載入失敗，將跳過圖資料庫同步：{_e}")
+    _neo4j_available = False
+
 # ── 加密模組 (與 security.py 相同邏輯) ──────────────────────────────────────
 from cryptography.fernet import Fernet
 _fernet = Fernet(ENCRYPTION_KEY.encode()) if ENCRYPTION_KEY else None
@@ -41,7 +66,7 @@ def encrypt_text(text: str, user_email: str) -> str:
 
 def get_embedding(text: str) -> list[float]:
     response = client.models.embed_content(
-        model="gemini-embedding-2",
+        model="gemini-embedding-001",
         contents=text,
         config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
     )
@@ -86,14 +111,14 @@ def analyze_diary_with_context(content: str, date_str: str, life_context: str) -
             "summary": "一段約60字的精要總結（請統一使用第一人稱「我」，如有跨事件關聯請自然提及）",
             "topic": "這個事件的主要標籤（簡短名詞），例如：感情、專題討論、紐西蘭旅遊",
             "keywords": ["具體人名", "地名", "獨特物件"], // 排除「聊天、訊息、朋友、我」等無意義通稱
-            "emotion_score": 0到100的整數 (0是最負面悲傷，100是最快樂正面，50是平靜),
+            "emotion_score": {EMOTION_SCORE_GUIDE},
             "importance_weight": 1到5的整數 (1是最不重要，5是對人生影響重大),
             "diary_time": "HH:MM 格式，若無則填 null",
             "timezone": "標準時區字串，例如 Pacific/Auckland，若無則填 Asia/Taipei"
         }}
     ]
     最後，請在 JSON 陣列的最後加上一個特殊物件（作為最後一個元素）：
-    {{ "__context_update__": "根據今天發生的所有事情，請用繁體中文更新並補充「前情提要」，請整合舊的前情提要內容，加入今天的新進展。保持在300字以內，重點保留重要人物的現況、未完結的事件進展、使用者目前的情緒狀態與重要計畫。\n【嚴重警告】絕對不可以竄改或替換任何人名！請完全照抄原文出現的名字（例如：陳政煒、鄭旭宸等），不要用同音字替換！" }}
+    {{ "__context_update__": "根據今天發生的所有事情，請用繁體中文更新並補充「前情提要」，請整合舊的前情提要內容，加入今天的新進展。請使用第一人稱「我」的視角來撰寫。保持在300字以內，重點保留重要人物的現況、未完結的事件進展、使用者目前的情緒狀態與重要計畫。\n【嚴重警告】絕對不可以竄改或替換任何人名！請完全照抄原文出現的名字（例如：陳政煒、鄭旭宸等），不要用同音字替換！" }}
 
     【⚠️ 嚴格防幻覺與擷取警告】
     1. 絕對禁止將不同時間、不同場合發生的人事物合併！
@@ -311,14 +336,29 @@ def main():
                     "timezone": timezone,
                     "topic": encrypt_text(event.get("topic", ""), user_email),
                     "summary": encrypt_text(event.get("summary", ""), user_email),
-                    "keywords": [encrypt_text(k, user_email) for k in event.get("keywords", [])],
+                    "keywords": [encrypt_text(k, user_email) for k in event.get("keywords", []) if k not in ["蕭筠蓁", "我", "自己"]],
                     "emotion_score": event.get("emotion_score", 50),
                     "importance_weight": event.get("importance_weight", 3),
                     "content": encrypt_text(event.get("exact_quote", diary_text), user_email),  # 擷取單一事件的原文片段，不儲存一整天的全文
                     "embedding": embedding
                 }
-                supabase.table("memories").insert(data).execute()
+                result = supabase.table("memories").insert(data).execute()
                 total_inserted += 1
+                
+                # 同步到 Neo4j 圖資料庫（只同步結構化資訊，不寫入 topic/summary 內容明文）
+                if _neo4j_available and result.data:
+                    try:
+                        memory_id = str(result.data[0]["id"])
+                        sync_event_to_graph(
+                            user_id=user_id,
+                            memory_id=memory_id,
+                            date_str=date_str,
+                            keywords=[k for k in event.get("keywords", []) if k not in ["蕭筠蓁", "我", "自己"]],
+                            emotion_score=event.get("emotion_score", 50),
+                            importance_weight=event.get("importance_weight", 3)
+                        )
+                    except Exception as _ge:
+                        print(f"   ⚠️ Neo4j 同步失敗（不影響 Supabase）：{_ge}")
 
             # 更新滾動式前情提要
             if context_update:

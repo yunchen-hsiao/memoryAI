@@ -87,4 +87,54 @@ begin
   order by final_score desc
   limit match_count;
 end;
-$$;
+$$
+security invoker; -- 明確使用呼叫者權限執行，確保 RLS policy 對此函式生效
+
+-- ============================================================================
+-- Row Level Security (RLS)
+-- ============================================================================
+-- 前端使用的 Supabase anon key 會被打包進瀏覽器 JS bundle，屬於公開資訊。
+-- 若不啟用 RLS，任何人取得 anon key 後即可直接用 supabase-js 讀取／竄改
+-- 任意使用者的資料，完全繞過 FastAPI 後端的 JWT 驗證。
+-- 後端使用 service role key 呼叫 Supabase，service role 預設會繞過 RLS，
+-- 因此以下設定不影響後端現有功能。
+
+alter table public.profiles enable row level security;
+create policy "profiles_select_own" on public.profiles
+  for select using (auth.uid() = id);
+create policy "profiles_insert_own" on public.profiles
+  for insert with check (auth.uid() = id);
+create policy "profiles_update_own" on public.profiles
+  for update using (auth.uid() = id) with check (auth.uid() = id);
+create policy "profiles_delete_own" on public.profiles
+  for delete using (auth.uid() = id);
+
+alter table public.user_contexts enable row level security;
+create policy "user_contexts_select_own" on public.user_contexts
+  for select using (auth.uid() = user_id);
+create policy "user_contexts_insert_own" on public.user_contexts
+  for insert with check (auth.uid() = user_id);
+create policy "user_contexts_update_own" on public.user_contexts
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "user_contexts_delete_own" on public.user_contexts
+  for delete using (auth.uid() = user_id);
+
+alter table public.memories enable row level security;
+create policy "memories_select_own" on public.memories
+  for select using (auth.uid() = user_id);
+create policy "memories_insert_own" on public.memories
+  for insert with check (auth.uid() = user_id);
+create policy "memories_update_own" on public.memories
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "memories_delete_own" on public.memories
+  for delete using (auth.uid() = user_id);
+
+alter table public.entities enable row level security;
+create policy "entities_select_own" on public.entities
+  for select using (auth.uid() = user_id);
+create policy "entities_insert_own" on public.entities
+  for insert with check (auth.uid() = user_id);
+create policy "entities_update_own" on public.entities
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "entities_delete_own" on public.entities
+  for delete using (auth.uid() = user_id);
