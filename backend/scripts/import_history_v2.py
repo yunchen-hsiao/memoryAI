@@ -44,14 +44,22 @@ EMOTION_SCORE_GUIDE = """0到100的整數，請根據「使用者當下主觀感
         語氣平和就打高分。"""
 
 # 初始化 Neo4j 圖資料庫連線
-try:
-    import sys as _sys
-    _sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from graph_db import sync_event_to_graph
-    _neo4j_available = True
-except Exception as _e:
-    print(f"⚠️ Neo4j 模組載入失敗，將跳過圖資料庫同步：{_e}")
+# 可用環境變數 SKIP_NEO4J_SYNC=1 在批次匯入時完全跳過 Neo4j 同步，
+# 避免匯入過程被連線不穩的重試機制拖慢。匯入完成後可用
+# scripts/build_graph.py 一次性把 Supabase 全部資料補齊同步到 Neo4j。
+_skip_neo4j_sync = os.environ.get("SKIP_NEO4J_SYNC", "").strip() == "1"
+if _skip_neo4j_sync:
+    print("⏭️  已設定 SKIP_NEO4J_SYNC=1，本次匯入將完全跳過 Neo4j 同步（匯入完成後請自行執行 build_graph.py）")
     _neo4j_available = False
+else:
+    try:
+        import sys as _sys
+        _sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from graph_db import sync_event_to_graph
+        _neo4j_available = True
+    except Exception as _e:
+        print(f"⚠️ Neo4j 模組載入失敗，將跳過圖資料庫同步：{_e}")
+        _neo4j_available = False
 
 # ── 加密模組 (與 security.py 相同邏輯) ──────────────────────────────────────
 from cryptography.fernet import Fernet
