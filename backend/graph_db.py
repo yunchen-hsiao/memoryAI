@@ -4,8 +4,10 @@ graph_db.py — Neo4j AuraDB 共用連線模組
 """
 
 import os
+import time
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
+from neo4j.exceptions import ServiceUnavailable, SessionExpired
 
 load_dotenv()
 
@@ -18,7 +20,14 @@ _driver = None
 def get_driver():
     global _driver
     if _driver is None:
-        _driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD))
+        # max_transaction_retry_time 縮短為 10 秒（預設 30 秒）：
+        # AuraDB 免費層的路由表 ttl 只有 10 秒左右，遇到間歇性網路不穩時，
+        # 讓失敗更快浮現，不要在批次匯入過程中卡住太久。
+        # Neo4j 同步失敗不影響 Supabase 寫入，事後可用 build_graph.py 補跑修復。
+        _driver = GraphDatabase.driver(
+            NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD),
+            max_transaction_retry_time=10
+        )
     return _driver
 
 def close_driver():
@@ -27,19 +36,49 @@ def close_driver():
         _driver.close()
         _driver = None
 
-def sync_event_to_graph(user_id: str, memory_id: str, date_str: str, topic: str, summary: str, keywords: list[str], emotion_score: int):
+def _reset_driver():
+    """
+    強制重建 driver（丟棄舊的連線池與路由表）。
+    用於長時間執行的腳本（例如批次匯入）中，路由表過期或連線失效時的復原手段：
+    單靠 retry_transaction 重試同一個壞掉的 driver 沒有用，必須重新建立連線。
+    """
+    global _driver
+    if _driver:
+        try:
+            _driver.close()
+        except Exception:
+            pass
+        _driver = None
+    return get_driver()
+
+def sync_event_to_graph(user_id: str, memory_id: str, date_str: str, keywords: list[str],
+                         emotion_score: int, importance_weight: int = 3,
+                         _retry: bool = True):
     """
     把一筆記憶事件同步到 Neo4j 圖資料庫。
-    建立：使用者節點、事件節點、日期節點、人物節點，以及它們之間的關係邊。
+    僅同步結構化關聯（人物、日期、情緒分數等），不寫入 topic/summary 等內容明文，
+    以維持與 Supabase 加密欄位一致的隱私程度。事件內容一律回 Supabase 解密取得。
+
+    若遇到路由資訊取得失敗或連線逾期（常見於長時間執行的批次腳本，AuraDB
+    的連線池/路由表在間隔等待後失效），會重建 driver 後重試一次。
     """
     driver = get_driver()
-    with driver.session() as session:
-        session.execute_write(
-            _create_memory_graph,
-            user_id, memory_id, date_str, topic, summary, keywords, emotion_score
-        )
+    try:
+        with driver.session() as session:
+            session.execute_write(
+                _create_memory_graph,
+                user_id, memory_id, date_str, keywords, emotion_score, importance_weight
+            )
+    except (ServiceUnavailable, SessionExpired) as e:
+        if not _retry:
+            raise
+        print(f"⚠️ Neo4j 連線異常（{e}），重建連線後重試一次...")
+        time.sleep(1)
+        _reset_driver()
+        sync_event_to_graph(user_id, memory_id, date_str, keywords, emotion_score,
+                             importance_weight, _retry=False)
 
-def _create_memory_graph(tx, user_id, memory_id, date_str, topic, summary, keywords, emotion_score):
+def _create_memory_graph(tx, user_id, memory_id, date_str, keywords, emotion_score, importance_weight):
     # 1. 建立/合併 User 節點
     tx.run(
         "MERGE (u:User {id: $user_id})",
@@ -53,17 +92,16 @@ def _create_memory_graph(tx, user_id, memory_id, date_str, topic, summary, keywo
     )
 
     # 3. 建立 Event 節點 (每次都是新的，用 memory_id 識別)
+    # 注意：只儲存結構化屬性，不存 topic/summary 等內容明文
     tx.run(
         """
         MERGE (e:Event {id: $memory_id})
-        ON CREATE SET e.topic = $topic, e.summary = $summary, 
-                      e.emotion_score = $emotion_score, e.date = $date_str,
-                      e.user_id = $user_id
-        ON MATCH SET e.topic = $topic, e.summary = $summary,
-                     e.emotion_score = $emotion_score
+        ON CREATE SET e.emotion_score = $emotion_score, e.importance_weight = $importance_weight,
+                      e.date = $date_str, e.user_id = $user_id
+        ON MATCH SET e.emotion_score = $emotion_score, e.importance_weight = $importance_weight
         """,
-        memory_id=memory_id, topic=topic, summary=summary,
-        emotion_score=emotion_score, date_str=date_str, user_id=user_id
+        memory_id=memory_id, emotion_score=emotion_score,
+        importance_weight=importance_weight, date_str=date_str, user_id=user_id
     )
 
     # 4. 關係：User -> 擁有 -> Event
@@ -107,20 +145,30 @@ def _create_memory_graph(tx, user_id, memory_id, date_str, topic, summary, keywo
             memory_id=memory_id, kw=kw, user_id=user_id
         )
 
-def get_person_connections(user_id: str, person_name: str, limit: int = 10) -> list[dict]:
-    """查詢某人物的所有相關事件（多跳查詢）"""
+def get_person_connections(user_id: str, person_name: str, limit: int = 30, _retry: bool = True) -> list[dict]:
+    """
+    查詢某人物的所有相關事件（多跳查詢）。
+    只回傳結構化資訊（memory_id, date, emotion_score, importance_weight），
+    不含事件內容，呼叫端需另外向 Supabase 查詢 memory_id 對應的記錄並解密。
+    """
     driver = get_driver()
-    with driver.session() as session:
-        result = session.run(
-            """
-            MATCH (u:User {id: $user_id})-[:EXPERIENCED]->(e:Event)-[:MENTIONS]->(k:Keyword {name: $name, user_id: $user_id})
-            RETURN e.date AS date, e.topic AS topic, e.summary AS summary, e.emotion_score AS emotion_score
-            ORDER BY e.date DESC
-            LIMIT $limit
-            """,
-            user_id=user_id, name=person_name, limit=limit
-        )
-        return [dict(record) for record in result]
+    try:
+        with driver.session() as session:
+            result = session.run(
+                """
+                MATCH (u:User {id: $user_id})-[:EXPERIENCED]->(e:Event)-[:MENTIONS]->(k:Keyword {name: $name, user_id: $user_id})
+                RETURN e.id AS memory_id, e.date AS date, e.emotion_score AS emotion_score, e.importance_weight AS importance_weight
+                ORDER BY e.date DESC
+                LIMIT $limit
+                """,
+                user_id=user_id, name=person_name, limit=limit
+            )
+            return [dict(record) for record in result]
+    except (ServiceUnavailable, SessionExpired):
+        if not _retry:
+            raise
+        _reset_driver()
+        return get_person_connections(user_id, person_name, limit, _retry=False)
 
 def get_co_mentioned_keywords(user_id: str, keyword_name: str, limit: int = 8) -> list[dict]:
     """查詢跟某關鍵字最常同時出現的其他關鍵字（共現分析）"""

@@ -50,7 +50,7 @@ def main():
             "CREATE CONSTRAINT user_id IF NOT EXISTS FOR (u:User) REQUIRE u.id IS UNIQUE",
             "CREATE CONSTRAINT event_id IF NOT EXISTS FOR (e:Event) REQUIRE e.id IS UNIQUE",
             "CREATE CONSTRAINT date_unique IF NOT EXISTS FOR (d:Date) REQUIRE d.date IS UNIQUE",
-            "CREATE INDEX kw_name_user IF NOT EXISTS FOR (k:Keyword) ON (k.name, k.user_id)",
+            "CREATE CONSTRAINT kw_name_user_unique IF NOT EXISTS FOR (k:Keyword) REQUIRE (k.name, k.user_id) IS UNIQUE",
         ]
         for cypher in constraints:
             try:
@@ -82,11 +82,11 @@ def main():
                 close_driver()
                 time.sleep(2)
 
-            # 解密
+            # 解密（topic 僅用於進度顯示，不再寫入 Neo4j）
             topic = decrypt_text(m.get("topic", ""))
-            summary = decrypt_text(m.get("summary", ""))
             keywords = [decrypt_text(k) for k in (m.get("keywords") or [])]
             emotion_score = m.get("emotion_score", 50)
+            importance_weight = m.get("importance_weight", 3)
             date_str = m.get("diary_date", "")
             memory_id = str(m["id"])
 
@@ -94,10 +94,9 @@ def main():
                 user_id=user_id,
                 memory_id=memory_id,
                 date_str=date_str,
-                topic=topic,
-                summary=summary,
                 keywords=keywords,
-                emotion_score=emotion_score
+                emotion_score=emotion_score,
+                importance_weight=importance_weight
             )
             success += 1
             print(f"  [OK] [{i+1}/{len(memories)}] {date_str} | {topic}", end="\r")

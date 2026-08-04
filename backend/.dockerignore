@@ -1,0 +1,24 @@
+# 環境變數與密鑰，絕對不能打包進 Docker image
+.env
+.env.*
+
+# Python 快取與虛擬環境
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# 版本控制與編輯器
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# 執行時期產生的檔案，不應該在建置時就打包進 image
+monthly_summaries_cache.json
+out.txt
+scripts/embedding_backup_*.json
+
+# 開發用測試腳本輸出
+*.log
