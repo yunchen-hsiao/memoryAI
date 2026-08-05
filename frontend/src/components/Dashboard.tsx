@@ -3,6 +3,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { Brain, TrendingUp, PieChart as PieChartIcon, Calendar, Heart, Sparkles, Network, BookOpen } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import MemoryGraph from './MemoryGraph';
+import RelationshipHeatmap from './RelationshipHeatmap';
 import { DashboardIcon } from './Icons';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -323,6 +324,18 @@ export default function Dashboard({ token }: DashboardProps) {
         <div className="flex-1 rounded-xl overflow-hidden relative">
           <MemoryGraph token={token} />
         </div>
+      </div>
+
+      {/* Relationship Heatmap Card */}
+      <div className="rounded-2xl p-6 shadow-lg" style={{ backgroundColor: 'var(--color-m-panel)', border: '1px solid var(--color-m-border)' }}>
+        <div className="flex items-center gap-2 mb-2" style={{ color: 'var(--color-m-text)' }}>
+          <Heart className="w-5 h-5" style={{ color: 'var(--color-m-accent1)' }} />
+          <h3 className="text-lg font-semibold">關係溫度計 (人物 × 月份情緒變化)</h3>
+        </div>
+        <p className="text-sm mb-5" style={{ color: 'var(--color-m-muted)' }}>
+          每一列是一個人，每一格是那個月跟他互動的平均情緒。可以看出關係隨時間的升溫或降溫。
+        </p>
+        <RelationshipHeatmap token={token} />
       </div>
 
       <div className="flex flex-col gap-6">
