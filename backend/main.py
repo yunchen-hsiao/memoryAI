@@ -21,7 +21,8 @@ from security import encrypt_text, decrypt_text
 
 # 初始化 Neo4j 圖資料庫連線
 try:
-    from graph_db import sync_event_to_graph, get_full_graph, get_person_connections, get_co_mentioned_keywords
+    from graph_db import (sync_event_to_graph, get_full_graph, get_person_connections,
+                          get_co_mentioned_keywords, get_person_relationship_graph)
     _neo4j_available = True
 except Exception as _e:
     print(f"⚠️ Neo4j 模組載入失敗，圖資料庫功能將停用：{_e}")
@@ -986,6 +987,124 @@ def get_graph_data(current_user = Depends(get_current_user)):
         data = get_full_graph(str(current_user.id))
         return {"success": True, **data}
     except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/api/dashboard/relationship_heatmap")
+def get_relationship_heatmap(current_user = Depends(get_current_user)):
+    """
+    人物 × 月份的情緒熱力圖資料。
+    對 entities 表中的每個人物，逐月聚合互動次數與平均情緒分數，
+    用來觀察「每段關係隨時間的情緒變化」。
+    資料全部來自 Supabase（需解密 keywords/summary 做人物比對），不依賴 Neo4j。
+    """
+    try:
+        entities_res = supabase.table("entities").select("name") \
+            .eq("user_id", current_user.id).execute()
+        person_names = [e["name"] for e in (entities_res.data or []) if e.get("name")]
+        if not person_names:
+            return {
+                "success": True, "months": [], "persons": [],
+                "message": "尚未編譯核心人物檔案，請先執行「編譯核心人物檔案」。"
+            }
+
+        mem_res = supabase.table("memories").select("diary_date, emotion_score, keywords, summary") \
+            .eq("user_id", current_user.id).execute()
+        memories = mem_res.data or []
+        if not memories:
+            return {"success": True, "months": [], "persons": []}
+
+        for m in memories:
+            m["keywords"] = [decrypt_text(k) for k in (m.get("keywords") or [])]
+            m["summary"] = decrypt_text(m.get("summary", ""))
+
+        # 收集所有出現過的月份（YYYY-MM），依時間排序
+        all_months = sorted({
+            (m.get("diary_date") or "")[:7]
+            for m in memories if m.get("diary_date")
+        })
+
+        persons = []
+        for name in person_names:
+            # 與 dashboard entity_analysis 一致的比對方式：keywords 或 summary 命中
+            related = [
+                m for m in memories
+                if name in (m.get("keywords") or []) or name in (m.get("summary") or "")
+            ]
+            if not related:
+                continue
+
+            by_month: dict[str, list[int]] = {}
+            for m in related:
+                month = (m.get("diary_date") or "")[:7]
+                score = m.get("emotion_score")
+                if not month or score is None:
+                    continue
+                by_month.setdefault(month, []).append(score)
+
+            cells = [
+                {
+                    "month": month,
+                    "count": len(scores),
+                    "avg_score": round(sum(scores) / len(scores), 1),
+                }
+                for month, scores in sorted(by_month.items())
+            ]
+            all_scores = [s for scores in by_month.values() for s in scores]
+
+            persons.append({
+                "name": name,
+                "total_count": len(related),
+                "avg_score": round(sum(all_scores) / len(all_scores), 1) if all_scores else None,
+                "cells": cells,
+            })
+
+        # 互動次數多的人物排在前面
+        persons.sort(key=lambda p: p["total_count"], reverse=True)
+
+        return {"success": True, "months": all_months, "persons": persons}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
+
+@app.get("/api/graph/persons")
+def get_persons_graph(current_user = Depends(get_current_user)):
+    """
+    人物中心的關係圖：只保留 entities 表中已被判定為人物的節點，
+    並附上每個人物的平均情緒分數、互動次數與人物檔案，供前端做顏色/大小編碼。
+    """
+    if not _neo4j_available:
+        return {"error": "Neo4j 圖資料庫目前不可用"}
+    try:
+        entities_res = supabase.table("entities").select("name, description, relationship") \
+            .eq("user_id", current_user.id).execute()
+        entities = entities_res.data or []
+        if not entities:
+            return {
+                "success": True, "nodes": [], "links": [],
+                "message": "尚未編譯核心人物檔案，請先執行「編譯核心人物檔案」。"
+            }
+
+        person_names = [e["name"] for e in entities if e.get("name")]
+        graph = get_person_relationship_graph(str(current_user.id), person_names)
+
+        # 把人物檔案（需解密）併入節點資料，讓前端點擊時可直接顯示
+        profile_by_name = {
+            e["name"]: {
+                "description": decrypt_text(e.get("description", "")),
+                "relationship": decrypt_text(e.get("relationship", "")),
+            }
+            for e in entities if e.get("name")
+        }
+        for node in graph["nodes"]:
+            profile = profile_by_name.get(node["id"], {})
+            node["description"] = profile.get("description", "")
+            node["relationship"] = profile.get("relationship", "")
+
+        return {"success": True, **graph}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return {"error": str(e)}
 
 @app.get("/api/graph/person/{person_name}")

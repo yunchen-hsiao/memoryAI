@@ -226,3 +226,82 @@ def get_full_graph(user_id: str) -> dict:
             "nodes": nodes,
             "links": links
         }
+
+def get_person_relationship_graph(user_id: str, person_names: list[str],
+                                   _retry: bool = True) -> dict:
+    """
+    取得「人物中心」的關係圖結構（供前端視覺化用）。
+
+    與 get_full_graph() 的差異：
+    - get_full_graph 會回傳所有高頻 Keyword（含地點、活動、雜訊通稱），節點多且雜。
+    - 本函式只處理呼叫端傳入的人物白名單（通常來自 entities 表，已被 AI 判定為人物），
+      節點數量少而精準，並額外聚合該人物相關事件的平均情緒與重要度。
+
+    情緒/重要度來自 Neo4j Event 節點的結構化欄位，不需要解密任何日記內容。
+
+    回傳:
+        {
+          "nodes": [{id, label, size, avg_score, event_count, first_date, last_date}, ...],
+          "links": [{source, target, weight}, ...]
+        }
+    """
+    names = [n.strip() for n in (person_names or []) if n and n.strip()]
+    if not names:
+        return {"nodes": [], "links": []}
+
+    driver = get_driver()
+    try:
+        with driver.session() as session:
+            node_result = session.run(
+                """
+                MATCH (u:User {id: $user_id})-[:EXPERIENCED]->(e:Event)-[:MENTIONS]->(k:Keyword {user_id: $user_id})
+                WHERE k.name IN $names
+                RETURN k.name AS name,
+                       count(e) AS event_count,
+                       avg(e.emotion_score) AS avg_score,
+                       avg(e.importance_weight) AS avg_importance,
+                       min(e.date) AS first_date,
+                       max(e.date) AS last_date
+                ORDER BY event_count DESC
+                """,
+                user_id=user_id, names=names
+            )
+            nodes = []
+            for r in node_result:
+                nodes.append({
+                    "id": r["name"],
+                    "label": r["name"],
+                    "size": r["event_count"],
+                    "event_count": r["event_count"],
+                    "avg_score": round(r["avg_score"], 1) if r["avg_score"] is not None else None,
+                    "avg_importance": round(r["avg_importance"], 1) if r["avg_importance"] is not None else None,
+                    "first_date": r["first_date"],
+                    "last_date": r["last_date"],
+                })
+
+            node_names = [n["id"] for n in nodes]
+            if not node_names:
+                return {"nodes": [], "links": []}
+
+            # 連線僅限於已選出的節點之間，避免產生前端 d3-force 找不到端點的懸空連線
+            rel_result = session.run(
+                """
+                MATCH (k1:Keyword {user_id: $user_id})<-[:MENTIONS]-(e:Event)-[:MENTIONS]->(k2:Keyword {user_id: $user_id})
+                WHERE k1.name < k2.name AND k1.name IN $names AND k2.name IN $names
+                RETURN k1.name AS source, k2.name AS target, count(*) AS weight
+                ORDER BY weight DESC
+                LIMIT 200
+                """,
+                user_id=user_id, names=node_names
+            )
+            links = [
+                {"source": r["source"], "target": r["target"], "weight": r["weight"]}
+                for r in rel_result
+            ]
+
+            return {"nodes": nodes, "links": links}
+    except (ServiceUnavailable, SessionExpired):
+        if not _retry:
+            raise
+        _reset_driver()
+        return get_person_relationship_graph(user_id, person_names, _retry=False)
