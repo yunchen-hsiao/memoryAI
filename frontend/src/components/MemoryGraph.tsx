@@ -154,18 +154,18 @@ export default function MemoryGraph({ token }: { token: string | null }) {
 
   useEffect(() => {
     // 調整引力引擎，讓節點互相排斥得更遠，並拉長連線距離
+    // 注意：ForceGraph2D 只會在 dimensions 量測完成後才掛載（見下方渲染條件），
+    // 所以這裡也要依賴 dimensions，確保圖真正掛載時 fgRef.current 已存在，
+    // 排斥力設定才會真正生效，避免節點因為初次模擬時畫布尺寸為 0 而疊成一坨。
     if (fgRef.current) {
-      // 調整引力引擎，因為現在只有人物節點，稍微拉近距離
-      if (fgRef.current) {
-        fgRef.current.d3Force('charge').strength(-800);
-        fgRef.current.d3Force('link').distance(150);
-      }
+      fgRef.current.d3Force('charge').strength(-800);
+      fgRef.current.d3Force('link').distance(150);
     }
-  }, [data]);
+  }, [data, dimensions]);
 
   return (
     <div ref={containerRef} className="w-full h-full rounded-2xl shadow-inner overflow-hidden relative" style={{ backgroundColor: '#1a1e24', border: '1px solid #353e49' }}>
-      {!data.nodes || data.nodes.length === 0 ? (
+      {!data.nodes || data.nodes.length === 0 || dimensions.width === 0 || dimensions.height === 0 ? (
         <div className="absolute inset-0 flex items-center justify-center text-slate-500">
           <p>等待星系資料... (若持續未顯示，請確認後端是否已重新啟動)</p>
         </div>
