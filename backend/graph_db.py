@@ -201,16 +201,24 @@ def get_full_graph(user_id: str) -> dict:
             user_id=user_id
         )
         nodes = [{"id": r["name"], "label": r["name"], "type": "keyword", "size": r["count"]} for r in kw_result]
+        node_names = [n["id"] for n in nodes]
 
-        # 取得所有 Keyword-Keyword 共現關係
+        if not node_names:
+            return {"nodes": [], "links": []}
+
+        # 取得 Keyword-Keyword 共現關係
+        # 重要：必須限制在上面已選出的節點範圍內（$names）。
+        # 否則節點查詢的 LIMIT 80 與連線查詢的 LIMIT 150 各自獨立，
+        # 會產生「連線端點不在節點清單中」的懸空連線，導致前端 d3-force
+        # 找不到對應節點而拋錯，整個力學模擬中斷（節點全部擠在中心不會動）。
         rel_result = session.run(
             """
             MATCH (k1:Keyword {user_id: $user_id})<-[:MENTIONS]-(e:Event)-[:MENTIONS]->(k2:Keyword {user_id: $user_id})
-            WHERE k1.name < k2.name
+            WHERE k1.name < k2.name AND k1.name IN $names AND k2.name IN $names
             RETURN k1.name AS source, k2.name AS target, count(*) AS weight
             ORDER BY weight DESC LIMIT 150
             """,
-            user_id=user_id
+            user_id=user_id, names=node_names
         )
         links = [{"source": r["source"], "target": r["target"], "weight": r["weight"]} for r in rel_result]
 
