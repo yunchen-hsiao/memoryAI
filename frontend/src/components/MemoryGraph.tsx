@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
 import { X } from 'lucide-react';
+import { emotionColor, EMOTION_GRADIENT } from '../lib/emotionColor';
 
 interface PersonNode {
   id: string;
@@ -38,24 +39,6 @@ interface PersonEvent {
 }
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
-/**
- * 依情緒分數取得顏色。
- * 注意：實際資料的平均情緒集中在 58~67 這個窄區間，若用絕對的 0-100 門檻上色，
- * 所有節點會是同一個顏色。因此改用「相對於當前資料範圍」的正規化色階，
- * 讓人物之間的差異看得出來；實際數值則在標籤與側邊面板中明確顯示。
- */
-function scoreToColor(score: number | null, min: number, max: number): string {
-  if (score === null) return 'rgb(148, 163, 184)'; // slate-400：沒有資料
-  const range = max - min;
-  // 資料範圍過窄時（例如只有一個人物）直接給中性色，避免除以 0 或誇大差異
-  const t = range < 0.5 ? 0.5 : (score - min) / range;
-  // 冷色（低分，偏藍紫）→ 暖色（高分，偏琥珀）
-  const cold = [129, 140, 248]; // indigo-400
-  const warm = [251, 191, 36]; // amber-400
-  const rgb = cold.map((c, i) => Math.round(c + (warm[i] - c) * t));
-  return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
-}
 
 export default function MemoryGraph({ token }: { token: string | null }) {
   const [data, setData] = useState<GraphData>({ nodes: [], links: [] });
@@ -110,7 +93,7 @@ export default function MemoryGraph({ token }: { token: string | null }) {
     return { min: Math.min(...scores), max: Math.max(...scores) };
   }, [data.nodes]);
 
-  // 節點半徑依互動次數縮放。互動次數落差極大（例如 462 vs 12），
+  // 節點半徑依互動次數縮放。互動次數落差極大（例如 456 vs 12），
   // 用 sqrt 壓縮，避免最大的節點吃掉整個畫面。
   const radiusOf = useCallback((node: PersonNode) => {
     const count = node.event_count || 1;
@@ -128,12 +111,12 @@ export default function MemoryGraph({ token }: { token: string | null }) {
       if (node.x === undefined || node.y === undefined) return;
 
       const radius = radiusOf(node);
-      const color = scoreToColor(node.avg_score, scoreRange.min, scoreRange.max);
+      const color = emotionColor(node.avg_score, scoreRange.min, scoreRange.max);
       const isSelected = selectedPerson?.id === node.id;
 
       ctx.beginPath();
       ctx.shadowColor = color;
-      ctx.shadowBlur = isSelected ? 30 : 16;
+      ctx.shadowBlur = isSelected ? 28 : 14;
       ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI, false);
       ctx.fillStyle = color;
       ctx.fill();
@@ -199,8 +182,9 @@ export default function MemoryGraph({ token }: { token: string | null }) {
       ctx.beginPath();
       ctx.moveTo(startX, startY);
       ctx.lineTo(endX, endY);
+      // 選中人物的相關連線用色盤中的霧青綠高亮（accent2），其餘用低對比灰
       ctx.strokeStyle = isRelated
-        ? `rgba(251, 191, 36, ${0.35 + t * 0.45})`
+        ? `rgba(92, 179, 161, ${0.4 + t * 0.45})`
         : `rgba(148, 163, 184, ${0.08 + t * 0.22})`;
       ctx.lineWidth = 0.8 + t * 3;
       ctx.stroke();
@@ -227,9 +211,9 @@ export default function MemoryGraph({ token }: { token: string | null }) {
         .then(res => res.json())
         .then(fetched => {
           if (fetched && fetched.success) {
-            const events: PersonEvent[] = (fetched.events || []).slice().sort(
-              (a: PersonEvent, b: PersonEvent) => (a.date < b.date ? 1 : -1)
-            );
+            const events: PersonEvent[] = (fetched.events || [])
+              .slice()
+              .sort((a: PersonEvent, b: PersonEvent) => (a.date < b.date ? 1 : -1));
             setPersonEvents(events);
           }
         })
@@ -273,19 +257,14 @@ export default function MemoryGraph({ token }: { token: string | null }) {
         />
       )}
 
-      {/* 圖例 */}
-      {!isEmpty && (
+      {/* 圖例：選中人物時隱藏，避免與詳情面板互相干擾 */}
+      {!isEmpty && !selectedPerson && (
         <div
-          className="absolute bottom-4 left-4 backdrop-blur-md p-3 rounded-xl flex flex-col gap-2 text-xs"
+          className="absolute bottom-4 left-4 backdrop-blur-md p-3 rounded-xl flex flex-col gap-2 text-xs max-w-[calc(100%-2rem)]"
           style={{ backgroundColor: 'rgba(35, 41, 49, 0.85)', border: '1px solid #353e49' }}
         >
           <div className="flex items-center gap-2">
-            <div
-              className="h-2 w-24 rounded-full"
-              style={{
-                background: 'linear-gradient(to right, rgb(129,140,248), rgb(251,191,36))'
-              }}
-            />
+            <div className="h-2 w-24 rounded-full shrink-0" style={{ background: EMOTION_GRADIENT }} />
             <span style={{ color: '#e2e8f0' }}>情緒偏低 → 偏高</span>
           </div>
           <div style={{ color: '#94a3b8' }}>圓圈大小＝互動次數，連線粗細＝共同出現次數</div>
@@ -293,71 +272,81 @@ export default function MemoryGraph({ token }: { token: string | null }) {
         </div>
       )}
 
-      {/* 人物詳情面板 */}
+      {/* 人物詳情面板：整個內容區可滾動，避免長篇人物側寫被裁掉 */}
       {selectedPerson && (
         <div
-          className="absolute top-4 right-4 w-96 max-h-[calc(100%-2rem)] flex flex-col backdrop-blur-md p-5 rounded-xl shadow-2xl z-10"
+          className="absolute top-4 right-4 bottom-4 w-[22rem] max-w-[calc(100%-2rem)] flex flex-col rounded-xl shadow-2xl z-10 overflow-hidden"
           style={{ backgroundColor: 'rgba(35, 41, 49, 0.96)', border: '1px solid #353e49' }}
         >
-          <button
-            onClick={() => setSelectedPerson(null)}
-            className="absolute top-3 right-3 hover:text-white transition-colors"
-            style={{ color: '#94a3b8' }}
-            aria-label="關閉人物詳情"
+          {/* 固定標題列 */}
+          <div
+            className="flex items-start justify-between gap-2 px-5 pt-4 pb-3 shrink-0"
+            style={{ borderBottom: '1px solid #353e49' }}
           >
-            <X className="w-5 h-5" />
-          </button>
-
-          <h3 className="font-bold text-xl mb-1 pr-6" style={{ color: '#e2e8f0' }}>
-            {selectedPerson.label}
-          </h3>
-          <p className="text-sm mb-3" style={{ color: '#5cb3a1' }}>
-            {selectedPerson.relationship || '關係尚未編譯'}
-          </p>
-
-          <div className="grid grid-cols-3 gap-2 mb-4 text-center">
-            <div className="rounded-lg py-2" style={{ backgroundColor: 'rgba(15, 18, 22, 0.6)' }}>
-              <div className="text-lg font-semibold" style={{ color: '#e2e8f0' }}>
-                {selectedPerson.event_count}
-              </div>
-              <div className="text-[11px]" style={{ color: '#94a3b8' }}>互動次數</div>
+            <div className="min-w-0">
+              <h3 className="font-bold text-xl truncate" style={{ color: '#e2e8f0' }}>
+                {selectedPerson.label}
+              </h3>
+              <p className="text-sm mt-0.5 break-words" style={{ color: '#5cb3a1' }}>
+                {selectedPerson.relationship || '關係尚未編譯'}
+              </p>
             </div>
-            <div className="rounded-lg py-2" style={{ backgroundColor: 'rgba(15, 18, 22, 0.6)' }}>
-              <div
-                className="text-lg font-semibold"
-                style={{ color: scoreToColor(selectedPerson.avg_score, scoreRange.min, scoreRange.max) }}
-              >
-                {selectedPerson.avg_score ?? '—'}
-              </div>
-              <div className="text-[11px]" style={{ color: '#94a3b8' }}>平均情緒</div>
-            </div>
-            <div className="rounded-lg py-2" style={{ backgroundColor: 'rgba(15, 18, 22, 0.6)' }}>
-              <div className="text-lg font-semibold" style={{ color: '#e2e8f0' }}>
-                {selectedPerson.avg_importance ?? '—'}
-              </div>
-              <div className="text-[11px]" style={{ color: '#94a3b8' }}>平均重要度</div>
-            </div>
+            <button
+              onClick={() => setSelectedPerson(null)}
+              className="shrink-0 p-1 rounded-lg transition-colors hover:text-white"
+              style={{ color: '#94a3b8' }}
+              aria-label="關閉人物詳情"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
 
-          {(selectedPerson.first_date || selectedPerson.last_date) && (
-            <p className="text-xs mb-3" style={{ color: '#94a3b8' }}>
-              互動期間：{selectedPerson.first_date} ~ {selectedPerson.last_date}
-            </p>
-          )}
+          {/* 可滾動內容區 */}
+          <div className="flex-1 overflow-y-auto custom-scrollbar px-5 py-4">
+            <div className="grid grid-cols-3 gap-2 mb-4 text-center">
+              <div className="rounded-lg py-2 px-1" style={{ backgroundColor: 'rgba(15, 18, 22, 0.6)' }}>
+                <div className="text-lg font-semibold" style={{ color: '#e2e8f0' }}>
+                  {selectedPerson.event_count}
+                </div>
+                <div className="text-[11px]" style={{ color: '#94a3b8' }}>互動次數</div>
+              </div>
+              <div className="rounded-lg py-2 px-1" style={{ backgroundColor: 'rgba(15, 18, 22, 0.6)' }}>
+                <div
+                  className="text-lg font-semibold"
+                  style={{
+                    color: emotionColor(selectedPerson.avg_score, scoreRange.min, scoreRange.max)
+                  }}
+                >
+                  {selectedPerson.avg_score ?? '—'}
+                </div>
+                <div className="text-[11px]" style={{ color: '#94a3b8' }}>平均情緒</div>
+              </div>
+              <div className="rounded-lg py-2 px-1" style={{ backgroundColor: 'rgba(15, 18, 22, 0.6)' }}>
+                <div className="text-lg font-semibold" style={{ color: '#e2e8f0' }}>
+                  {selectedPerson.avg_importance ?? '—'}
+                </div>
+                <div className="text-[11px]" style={{ color: '#94a3b8' }}>平均重要度</div>
+              </div>
+            </div>
 
-          {selectedPerson.description && (
-            <p
-              className="text-sm leading-relaxed mb-4 pb-4"
-              style={{ color: '#cbd5e1', borderBottom: '1px solid #353e49' }}
-            >
-              {selectedPerson.description}
-            </p>
-          )}
+            {(selectedPerson.first_date || selectedPerson.last_date) && (
+              <p className="text-xs mb-3" style={{ color: '#94a3b8' }}>
+                互動期間：{selectedPerson.first_date} ~ {selectedPerson.last_date}
+              </p>
+            )}
 
-          <h4 className="text-sm font-semibold mb-2" style={{ color: '#e2e8f0' }}>
-            事件時間軸
-          </h4>
-          <div className="overflow-y-auto pr-1 flex-1">
+            {selectedPerson.description && (
+              <p
+                className="text-sm leading-relaxed mb-4 pb-4 break-words"
+                style={{ color: '#cbd5e1', borderBottom: '1px solid #353e49' }}
+              >
+                {selectedPerson.description}
+              </p>
+            )}
+
+            <h4 className="text-sm font-semibold mb-3" style={{ color: '#e2e8f0' }}>
+              事件時間軸
+            </h4>
             {eventsLoading ? (
               <p className="text-sm" style={{ color: '#94a3b8' }}>載入事件中...</p>
             ) : personEvents.length === 0 ? (
@@ -368,24 +357,27 @@ export default function MemoryGraph({ token }: { token: string | null }) {
                   <li
                     key={`${ev.date}-${idx}`}
                     className="pl-3"
-                    style={{
-                      borderLeft: `3px solid ${scoreToColor(ev.emotion_score, 20, 90)}`
-                    }}
+                    style={{ borderLeft: `3px solid ${emotionColor(ev.emotion_score, 20, 90)}` }}
                   >
                     <div className="flex items-baseline justify-between gap-2">
                       <span className="text-xs font-medium" style={{ color: '#94a3b8' }}>
                         {ev.date}
                       </span>
                       {ev.emotion_score !== null && (
-                        <span className="text-xs" style={{ color: scoreToColor(ev.emotion_score, 20, 90) }}>
+                        <span
+                          className="text-xs shrink-0"
+                          style={{ color: emotionColor(ev.emotion_score, 20, 90) }}
+                        >
                           {ev.emotion_score}
                         </span>
                       )}
                     </div>
                     {ev.topic && (
-                      <div className="text-xs mb-0.5" style={{ color: '#5cb3a1' }}>{ev.topic}</div>
+                      <div className="text-xs mb-0.5 break-words" style={{ color: '#5cb3a1' }}>
+                        {ev.topic}
+                      </div>
                     )}
-                    <p className="text-sm leading-snug" style={{ color: '#cbd5e1' }}>
+                    <p className="text-sm leading-snug break-words" style={{ color: '#cbd5e1' }}>
                       {ev.summary || '（無摘要）'}
                     </p>
                   </li>

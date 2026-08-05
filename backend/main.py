@@ -491,7 +491,14 @@ class ImportSingleRequest(BaseModel):
 @app.get("/api/memories")
 def get_memories(current_user = Depends(get_current_user)):
     try:
-        response = supabase.table("memories").select("*").eq("user_id", current_user.id).order("diary_date", desc=True).execute()
+        # 明確列出欄位，絕對不要用 select("*")。
+        # embedding 是 3072 維向量，每筆記憶約 39KB，902 筆會產生約 35MB 的 JSON，
+        # 解析成 Python 物件後記憶體用量會遠超 Render 免費層的 512MB 而被 OOM 中止。
+        # 前端時間軸完全不需要向量，排除後 payload 從 35MB 降到約 1MB。
+        response = supabase.table("memories").select(
+            "id, diary_date, diary_time, timezone, topic, summary, "
+            "emotion_score, importance_weight, keywords, content"
+        ).eq("user_id", current_user.id).order("diary_date", desc=True).execute()
         for m in response.data:
             m['summary'] = decrypt_text(m.get('summary', ''))
             m['content'] = decrypt_text(m.get('content', ''))

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { emotionColor, EMOTION_GRADIENT } from '../lib/emotionColor';
 
 interface HeatmapCell {
   month: string;
@@ -20,19 +21,6 @@ interface HeatmapData {
 }
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
-/**
- * 依情緒分數取得格子顏色（冷色=偏低，暖色=偏高）。
- * 色階範圍由實際資料決定，避免所有格子看起來同一個顏色。
- */
-function cellColor(score: number, min: number, max: number): string {
-  const range = max - min;
-  const t = range < 0.5 ? 0.5 : (score - min) / range;
-  const cold = [129, 140, 248]; // indigo-400
-  const warm = [251, 191, 36]; // amber-400
-  const rgb = cold.map((c, i) => Math.round(c + (warm[i] - c) * t));
-  return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
-}
 
 /** 2026-03 -> 26/03 */
 function formatMonth(month: string): string {
@@ -179,8 +167,8 @@ export default function RelationshipHeatmap({ token }: { token: string | null })
                       className="rounded-md text-center text-[11px] font-semibold"
                       style={{
                         height: '34px',
-                        backgroundColor: cellColor(cell.avg_score, scoreRange.min, scoreRange.max),
-                        color: 'rgba(15, 18, 22, 0.85)'
+                        backgroundColor: emotionColor(cell.avg_score, scoreRange.min, scoreRange.max),
+                        color: 'rgba(255, 255, 255, 0.95)'
                       }}
                       title={`${person.name}｜${month}：平均情緒 ${cell.avg_score}，互動 ${cell.count} 次`}
                     >
@@ -210,12 +198,7 @@ export default function RelationshipHeatmap({ token }: { token: string | null })
       <div className="flex flex-wrap items-center gap-4 text-xs" style={{ color: 'var(--color-m-muted)' }}>
         <div className="flex items-center gap-2">
           <span>情緒 {scoreRange.min}</span>
-          <div
-            className="h-2.5 w-28 rounded-full"
-            style={{
-              background: 'linear-gradient(to right, rgb(129,140,248), rgb(251,191,36))'
-            }}
-          />
+          <div className="h-2.5 w-28 rounded-full" style={{ background: EMOTION_GRADIENT }} />
           <span>{scoreRange.max}</span>
         </div>
         <span>格子中的數字＝該月互動次數</span>
