@@ -1,6 +1,7 @@
 import os
 import re
 import datetime
+import hashlib
 import json
 import time
 from dotenv import load_dotenv
@@ -71,6 +72,68 @@ def encrypt_text(text: str, user_email: str) -> str:
     if ADMIN_EMAIL and user_email.strip().lower() == ADMIN_EMAIL:
         return text  # 管理員豁免
     return _fernet.encrypt(text.encode()).decode()
+
+
+def decrypt_text(text: str) -> str:
+    if not _fernet or not text:
+        return text
+    try:
+        return _fernet.decrypt(text.encode()).decode()
+    except Exception:
+        # 管理員資料或舊資料可能本來就是明文。
+        return text
+
+
+def normalize_import_content(content: str) -> str:
+    return content.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def import_content_hash(content: str) -> str:
+    return hashlib.sha256(
+        normalize_import_content(content).encode("utf-8")
+    ).hexdigest()
+
+
+def get_latest_import_snapshot(user_id: str, date_str: str) -> dict | None:
+    try:
+        response = supabase.table("memory_imports").select(
+            "source_hash, source_content"
+        ).eq("user_id", user_id).eq("diary_date", date_str) \
+            .order("created_at", desc=True).limit(1).execute()
+        return response.data[0] if response.data else None
+    except Exception as error:
+        # 尚未執行 migration 時，繼續使用事件原文去重的相容模式。
+        if "memory_imports" not in str(error):
+            print(f"⚠️ 讀取匯入快照失敗：{error}")
+        return None
+
+
+def save_import_snapshot(user_id: str, date_str: str, content: str, user_email: str) -> None:
+    normalized = normalize_import_content(content)
+    try:
+        supabase.table("memory_imports").insert({
+            "user_id": user_id,
+            "diary_date": date_str,
+            "source_hash": import_content_hash(normalized),
+            "source_content": encrypt_text(normalized, user_email),
+        }).execute()
+    except Exception as error:
+        print(f"⚠️ 無法保存匯入快照（請先執行 memory_imports migration）：{error}")
+
+
+def get_existing_event_contents(user_id: str, date_str: str) -> set[str]:
+    try:
+        response = supabase.table("memories").select("content") \
+            .eq("user_id", user_id).eq("diary_date", date_str).execute()
+        return {
+            normalize_import_content(decrypt_text(row.get("content", "")))
+            for row in (response.data or [])
+            if row.get("content")
+        }
+    except Exception as error:
+        print(f"⚠️ 讀取既有事件原文失敗，將略過事件層去重：{error}")
+        return set()
+
 
 def get_embedding(text: str) -> list[float]:
     response = client.models.embed_content(
@@ -246,7 +309,11 @@ def main():
         segments = normalized.split("-")
         normalized = f"{segments[0]}-{int(segments[1]):02d}-{int(segments[2]):02d}"
         if text:
-            diary_by_date[normalized] = text
+            # 同一天若在檔案中出現多個日期標記，合併而不是覆蓋前一段。
+            if normalized in diary_by_date:
+                diary_by_date[normalized] += "\n\n" + text
+            else:
+                diary_by_date[normalized] = text
         i += 2
 
     sorted_dates = sorted(diary_by_date.keys())
@@ -263,23 +330,36 @@ def main():
     for date_str in sorted_dates:
         diary_text = diary_by_date[date_str]
 
-        # 檢查是否已匯入過（跳過重複）
-        existing = supabase.table("memories").select("id") \
-            .eq("diary_date", date_str).eq("user_id", user_id).limit(1).execute()
-        if existing.data:
-            print(f"⏭️  {date_str} 已存在，跳過。")
+        normalized_diary_text = normalize_import_content(diary_text)
+        source_hash = import_content_hash(normalized_diary_text)
+        snapshot = get_latest_import_snapshot(user_id, date_str)
+        if snapshot and snapshot.get("source_hash") == source_hash:
+            print(f"⏭️  {date_str} 內容完全相同，跳過。")
             skipped += 1
             continue
 
-        print(f"🔍 分析 {date_str}（{len(diary_text)} 字）...", end="", flush=True)
+        existing_event_contents = get_existing_event_contents(user_id, date_str)
+        analysis_text = normalized_diary_text
+        if snapshot and snapshot.get("source_content"):
+            previous_content = normalize_import_content(
+                decrypt_text(snapshot["source_content"])
+            )
+            if previous_content and normalized_diary_text.startswith(previous_content):
+                analysis_text = normalized_diary_text[len(previous_content):].strip()
+                if not analysis_text:
+                    print(f"⏭️  {date_str} 沒有新增內容，跳過。")
+                    skipped += 1
+                    continue
+
+        print(f"🔍 分析 {date_str}（新增 {len(analysis_text)} 字）...", end="", flush=True)
 
         # 針對超長日記進行自動分段 (上限 1500 字)，避免 AI 回覆被截斷
         max_chunk_size = 1500
         text_chunks = []
-        if len(diary_text) <= max_chunk_size:
-            text_chunks = [diary_text]
+        if len(analysis_text) <= max_chunk_size:
+            text_chunks = [analysis_text]
         else:
-            paragraphs = diary_text.split('\n')
+            paragraphs = analysis_text.split('\n')
             curr_chunk = ""
             for p in paragraphs:
                 # 處理單一段落字數就超過 max_chunk_size 的極端情況（例如沒有換行的長文）
@@ -322,7 +402,13 @@ def main():
 
             # 將事件寫入資料庫
             for event in all_events:
-                embedding_text = f"[{date_str}] 標籤:{event.get('topic','')} - {event.get('summary','')}。相關細節：{', '.join(event.get('keywords',[]))}。原文：{diary_text}"
+                event_quote = normalize_import_content(
+                    str(event.get("exact_quote") or analysis_text)
+                )
+                if event_quote and event_quote in existing_event_contents:
+                    continue
+
+                embedding_text = f"[{date_str}] 標籤:{event.get('topic','')} - {event.get('summary','')}。相關細節：{', '.join(event.get('keywords',[]))}。原文：{analysis_text}"
                 embedding = get_embedding(embedding_text)
 
                 diary_time = event.get("diary_time")
@@ -347,11 +433,13 @@ def main():
                     "keywords": [encrypt_text(k, user_email) for k in event.get("keywords", []) if k not in ["蕭筠蓁", "我", "自己"]],
                     "emotion_score": event.get("emotion_score", 50),
                     "importance_weight": event.get("importance_weight", 3),
-                    "content": encrypt_text(event.get("exact_quote", diary_text), user_email),  # 擷取單一事件的原文片段，不儲存一整天的全文
+                    "content": encrypt_text(event_quote, user_email),  # 擷取單一事件的原文片段，不儲存一整天的全文
                     "embedding": embedding
                 }
                 result = supabase.table("memories").insert(data).execute()
                 total_inserted += 1
+                if event_quote:
+                    existing_event_contents.add(event_quote)
                 
                 # 同步到 Neo4j 圖資料庫（只同步結構化資訊，不寫入 topic/summary 內容明文）
                 if _neo4j_available and result.data:
@@ -367,6 +455,9 @@ def main():
                         )
                     except Exception as _ge:
                         print(f"   ⚠️ Neo4j 同步失敗（不影響 Supabase）：{_ge}")
+
+            # 保存完整原始內容，下一次同日追加時只分析新增尾端。
+            save_import_snapshot(user_id, date_str, normalized_diary_text, user_email)
 
             # 更新滾動式前情提要
             if context_update:

@@ -1,4 +1,5 @@
 import json
+import hashlib
 from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
@@ -488,6 +489,46 @@ class ImportSingleRequest(BaseModel):
     date_str: str
     content: str
 
+
+def _normalize_import_content(content: str) -> str:
+    """Normalize line endings/outer whitespace for stable import comparisons."""
+    return content.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _import_content_hash(content: str) -> str:
+    return hashlib.sha256(_normalize_import_content(content).encode("utf-8")).hexdigest()
+
+
+def _get_latest_import_snapshot(user_id: str, date_str: str) -> dict | None:
+    """Return the latest raw diary snapshot, if the tracking table is installed."""
+    try:
+        response = supabase.table("memory_imports").select(
+            "source_hash, source_content"
+        ).eq("user_id", user_id).eq("diary_date", date_str) \
+            .order("created_at", desc=True).limit(1).execute()
+        return response.data[0] if response.data else None
+    except Exception as error:
+        # Keep imports compatible with databases that have not run the migration yet.
+        if "memory_imports" not in str(error):
+            print(f"⚠️ 讀取匯入快照失敗：{error}")
+        return None
+
+
+def _save_import_snapshot(user_id: str, date_str: str, content: str, user_email: str) -> None:
+    """Save a full encrypted source snapshot after all events are inserted."""
+    normalized = _normalize_import_content(content)
+    try:
+        supabase.table("memory_imports").insert({
+            "user_id": user_id,
+            "diary_date": date_str,
+            "source_hash": _import_content_hash(normalized),
+            "source_content": encrypt_text(normalized, user_email),
+        }).execute()
+    except Exception as error:
+        # The event import itself succeeded; surface migration instructions in logs.
+        print(f"⚠️ 無法保存匯入快照（請先執行 memory_imports migration）：{error}")
+
+
 @app.get("/api/memories")
 def get_memories(current_user = Depends(get_current_user)):
     try:
@@ -813,12 +854,36 @@ def update_user_context(user_id: str, new_context: str):
 @app.post("/api/import/single")
 def import_single_day(request: ImportSingleRequest, background_tasks: BackgroundTasks, current_user = Depends(get_current_user)):
     try:
-        # 1. 檢查這天是否已有資料（避免重複匯入）
-        existing = supabase.table('memories').select('id').eq('diary_date', request.date_str).eq('user_id', current_user.id).limit(1).execute()
-        if existing.data and len(existing.data) > 0:
-            return {"success": True, "skipped": True, "message": "Date already exists"}
+        normalized_content = _normalize_import_content(request.content)
+        if not normalized_content:
+            return {"success": False, "error": "日記內容不能是空白。"}
 
-        # 2. 讀取目前的人生脈絡前情提要
+        # 以內容快照判斷重複，而不是只看日期。
+        # 同一天若是舊內容加上新段落，只分析新增的尾端。
+        source_hash = _import_content_hash(normalized_content)
+        snapshot = _get_latest_import_snapshot(str(current_user.id), request.date_str)
+        if snapshot and snapshot.get("source_hash") == source_hash:
+            return {"success": True, "skipped": True, "message": "Content already imported"}
+
+        existing_res = supabase.table('memories').select('id, content') \
+            .eq('diary_date', request.date_str).eq('user_id', current_user.id).execute()
+        existing_event_contents = {
+            _normalize_import_content(decrypt_text(row.get("content", "")))
+            for row in (existing_res.data or [])
+            if row.get("content")
+        }
+
+        analysis_content = normalized_content
+        if snapshot and snapshot.get("source_content"):
+            previous_content = _normalize_import_content(
+                decrypt_text(snapshot["source_content"])
+            )
+            if previous_content and normalized_content.startswith(previous_content):
+                analysis_content = normalized_content[len(previous_content):].strip()
+                if not analysis_content:
+                    return {"success": True, "skipped": True, "message": "Content already imported"}
+
+        # 讀取目前的人生脈絡前情提要
         life_context = get_user_context(current_user.id)
 
         # 3. 呼叫分析工具 (帶入前情提要)
@@ -855,7 +920,7 @@ def import_single_day(request: ImportSingleRequest, background_tasks: Background
 
         如果整篇日記只有一個主題，就回傳兩個元素的陣列（一個事件 + 一個 __context_update__）。
         日記內容：
-        {request.content}
+        {analysis_content}
         """
 
         import time
@@ -908,9 +973,17 @@ def import_single_day(request: ImportSingleRequest, background_tasks: Background
                 real_events.append(ev)
 
         inserted_count = 0
+        skipped_event_count = 0
         for event in real_events:
-            # 使用原始日記全文而非 AI 生成的摘抄，確保原文完整保存
-            embedding_text = f"[{request.date_str}] 標籤:{event.get('topic','')} - {event.get('summary','')}。相關細節：{', '.join(event.get('keywords',[]))}。原文：{request.content}"
+            event_quote = _normalize_import_content(
+                str(event.get("exact_quote") or analysis_content)
+            )
+            # 舊版本沒有 source snapshot 時，仍以事件原文做第二層去重。
+            if event_quote and event_quote in existing_event_contents:
+                skipped_event_count += 1
+                continue
+
+            embedding_text = f"[{request.date_str}] 標籤:{event.get('topic','')} - {event.get('summary','')}。相關細節：{', '.join(event.get('keywords',[]))}。原文：{analysis_content}"
             embedding = get_embedding(embedding_text)
             
             import re
@@ -935,11 +1008,13 @@ def import_single_day(request: ImportSingleRequest, background_tasks: Background
                 "keywords": [encrypt_text(k, current_user.email) for k in event.get("keywords", []) if k not in ["蕭筠蓁", "我", "自己"]],
                 "emotion_score": event.get("emotion_score", 50),
                 "importance_weight": event.get("importance_weight", 3),
-                "content": encrypt_text(event.get("exact_quote", request.content), current_user.email),  # 擷取單一事件的原文片段，不儲存一整天的全文
+                "content": encrypt_text(event_quote, current_user.email),  # 擷取單一事件的原文片段，不儲存一整天的全文
                 "embedding": embedding
             }
             res = supabase.table("memories").insert(data).execute()
             inserted_count += 1
+            if event_quote:
+                existing_event_contents.add(event_quote)
             
             # 將事件同步至圖資料庫（放在背景執行，不卡住前端體驗）
             # 注意：只同步結構化資訊（人物關聯、日期、分數），不寫入 topic/summary 內容明文
@@ -954,6 +1029,11 @@ def import_single_day(request: ImportSingleRequest, background_tasks: Background
                     event.get("emotion_score", 50),
                     event.get("importance_weight", 3)
                 )
+
+        # 所有事件完成後才保存完整來源；下次同日追加時可只分析新增尾端。
+        _save_import_snapshot(
+            str(current_user.id), request.date_str, normalized_content, current_user.email
+        )
 
         # 5. 更新使用者的全局脈絡
         if context_update:
@@ -976,7 +1056,12 @@ def import_single_day(request: ImportSingleRequest, background_tasks: Background
             if not started:
                 print(f"⏭️ 使用者 {current_user.id} 的人物檔案更新任務已在執行中，本次跳過。")
 
-        return {"success": True, "inserted_count": inserted_count}
+        return {
+            "success": True,
+            "inserted_count": inserted_count,
+            "skipped_event_count": skipped_event_count,
+            "appended": analysis_content != normalized_content,
+        }
     except Exception as e:
         import traceback
         traceback.print_exc()
