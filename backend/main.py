@@ -173,13 +173,30 @@ def get_dashboard_stats(current_user = Depends(get_current_user)):
             "top_keyword": top_keyword
         }
 
-        # 深度分析前五大核心實體
-        # 只過濾出已經被 AI 認定為「人類/實體」並編譯進 entities 資料表的關鍵字
+        # 深度分析所有出現在人物關係圖中的人物
+        # 關係圖與角色看板共用 entities 表的人物白名單；不再限制為前五名。
         entities_res = supabase.table("entities").select("name").eq("user_id", current_user.id).execute()
-        valid_entity_names = {e["name"] for e in entities_res.data} if entities_res.data else set()
-        
-        top_keywords = [item["name"] for item in keyword_distribution if item["name"] in valid_entity_names][:5]
-        
+        valid_entity_names = {
+            e["name"] for e in (entities_res.data or []) if e.get("name")
+        }
+
+        # 只保留在目前記憶的 keywords 中確實出現過的人物，並依互動次數排序，
+        # 讓角色看板的順序與人物關係圖的主要節點一致。
+        entity_mention_counts = {
+            name: sum(
+                1 for m in memories
+                if name in (m.get("keywords") or [])
+            )
+            for name in valid_entity_names
+        }
+        top_keywords = [
+            name for name, count in sorted(
+                entity_mention_counts.items(),
+                key=lambda item: (-item[1], item[0])
+            )
+            if count > 0
+        ]
+
         entity_analysis = []
         
         # 將 memories 照日期排序，確保 latest_events 是最新的
