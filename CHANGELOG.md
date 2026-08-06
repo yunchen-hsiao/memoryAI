@@ -4,9 +4,43 @@
 
 ---
 
-## 📅 最新更新 (實體防幻覺與精確擷取)
+## 📅 最新更新 (人物關係視覺化與記憶體修復)
 
-### `最新` | 結構化防幻覺與原文字句精確擷取 (Verbatim Snippet Extraction)
+### `ecc9a38` - `94d7300` | 人物中心關係圖與關係溫度計 (Person-Centric Visualization)
+
+把原本「一坨看不懂」的記憶星系圖，整個換成以人為主角的兩種視覺化，讓圖表真的能讀出故事線。
+
+- **人物中心關係圖 (`GET /api/graph/persons`)**：後端新增 `get_person_relationship_graph()`，回傳人物節點（事件數、平均情緒、平均重要度、互動起訖日期、角色檔案）與人物之間的共現連線。前端 `MemoryGraph.tsx` 整份重寫：
+  - 節點半徑用 `sqrt(event_count)` 縮放，解決主要人物 460 次 vs 邊緣人物 12 次導致的視覺失衡。
+  - 節點顏色改用**相對色階**（依當前資料的 min/max 正規化）。實測發現真實資料的平均分數全部擠在 58~67，用絕對 0-100 門檻上色會讓所有節點顏色一模一樣。
+  - 連線粗細／亮度依共現次數正規化，選中人物的相關連線高亮。
+  - 點擊節點展開右側面板：人物檔案 + 三格統計 + 互動期間 + 該人物的真實事件時間軸（每項左側色條依當筆情緒分數上色）。
+- **關係溫度計 (`GET /api/dashboard/relationship_heatmap`)**：新增 `RelationshipHeatmap.tsx` 表格式熱力圖，列＝人物、欄＝月份、格子顏色＝該月平均情緒、格內數字＝該月互動次數，無互動月份用半透明底色。右側總計欄顯示總次數與整體平均。附 `sr-only` 無障礙描述與 hover tooltip。
+- **統一情緒色階 (`lib/emotionColor.ts`)**：抽出共用色階模組，改為莫蘭迪冷調三段漸層（薰衣草紫 → 霧霾藍 → 灰調綠），取代原本刺眼的琥珀黃。關係圖與熱力圖共用同一套色彩語言。
+- **側邊面板破版修復**：人物面板的長人名／長描述加上 `min-w-0`、`truncate`、`break-words`，中文長句不再溢出卡片。
+
+### `94d7300` | 修復 Render 記憶體爆炸 (OOM exit 137)
+
+- **`GET /api/memories` 排除 embedding 欄位**：原本用 `select("*")` 會把 3072 維向量一起撈出來，每筆約 39KB，900 筆就是約 35MB 的 JSON，解析成 Python 物件後遠超 Render 免費層 512MB，直接被 OOM Killer 殺掉（exit 137，前端表現為「記憶庫空白 + 後端整台掛掉」）。改成明確列出前端真正需要的欄位後，payload 降到約 1MB。
+- **已知限制**：此端點仍未分頁，筆數會線性成長，長期仍需改為 `?limit=&offset=` + 前端無限捲動。已記錄在 README 待辦。
+
+### `3e0da36` | 圖資料庫上雲與連線韌性
+
+- **Neo4j 環境變數接上雲端**：補上 Render 端的 `NEO4J_URI` / `NEO4J_USERNAME` / `NEO4J_PASSWORD`，修好「本機正常但線上關係圖永遠空白」的問題。
+- **降級不中斷 (Graceful Degradation)**：Neo4j 模組載入失敗或變數缺失時，只有圖相關 API 回報不可用，聊天／歸檔／時光機完全不受影響，不再整台後端啟動失敗。
+- **AuraDB 連線自動復原**：批次匯入腳本長時間執行時，AuraDB 的路由表／連線池會失效並噴 `Unable to retrieve routing information`。現在遇到 `ServiceUnavailable` / `SessionExpired` 會重建 driver 並重試一次，長跑匯入不再中途整批失敗。
+
+### `1a023a2` | 圖資料庫改為零明文 + 隱私善後
+
+- **圖譜只存結構化關聯**：Neo4j 不再寫入 `topic` / `summary` / 日記原文，只保留人物名稱、日期、情緒分數、重要度與 `memory_id`，需要內容時一律回 Supabase 解密取得。讓明文風險集中在單一個加密資料源。
+- **`migrate_graph_strip_content.py`**：一次性遷移腳本，清除早期版本殘留在圖節點上的內容明文。
+- **Git 歷史清理**：把誤上傳到 GitHub 的日記原文與 `.env` 從所有分支的歷史中徹底移除，並補齊 `.gitignore`。
+
+---
+
+## 📅 近期更新 (實體防幻覺與精確擷取)
+
+### `2fb259f` | 結構化防幻覺與原文字句精確擷取 (Verbatim Snippet Extraction)
 
 - **結構化參與者隔離**：在所有的 AI 記憶萃取 Prompt 中加入了 `involved_people` 陣列，強迫 AI 先定義「誰真正在場」，並下達嚴格警告。徹底解決了超長日記中，將不同段落的人事物錯誤縫合的 AI 幻覺問題。
 - **精確片段擷取 (Verbatim Snippet)**：導入 `exact_quote` 欄位，要求 AI 以「剪下貼上」的方式精確裁切出與單一事件對應的真實原文字句，並將其取代原本一整天份的冗長流水帳存入資料庫。大幅提升 RAG（檢索增強生成）的精準度與資料庫純淨度，更為未來無縫升級「圖資料庫 (Graph Database)」打下完美的結構化基礎。
