@@ -217,7 +217,10 @@ function App() {
     `flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all`;
 
   return (
-    <div className="flex flex-col h-screen font-sans" style={s.base}>
+    <div
+      className="fixed inset-0 flex flex-col min-h-0 overflow-hidden font-sans"
+      style={{ ...s.base, position: 'fixed', inset: 0, width: '100vw', height: '100dvh', overflow: 'hidden' }}
+    >
       {/* ===== Header ===== */}
       <header className="p-3 flex justify-between items-center shadow-sm z-40 shrink-0" style={s.header}>
         <div className="flex items-center gap-4 lg:gap-6">
@@ -345,16 +348,16 @@ function App() {
       )}
 
       {/* ===== Main Content ===== */}
-      <div className="flex-1 flex overflow-hidden flex-col lg:flex-row">
+      <div className="flex-1 flex min-h-0 overflow-hidden flex-col lg:flex-row">
         {activeTab === 'import' ? (
-          <div className="flex-1 overflow-y-auto w-full h-full">
+          <div className="flex-1 min-h-0 overflow-y-auto w-full h-full">
             <BatchImport token={session?.access_token || null} />
           </div>
         ) : (
           <>
             {/* Left Panel: Dashboard / Timeline */}
             <div
-              className={`flex-col border-r ${['dashboard', 'timeline'].includes(activeTab) ? 'flex' : 'hidden lg:flex'} lg:w-[60%] h-full overflow-hidden`}
+              className={`flex-col min-h-0 border-r ${['dashboard', 'timeline'].includes(activeTab) ? 'flex' : 'hidden lg:flex'} lg:w-[60%] h-full overflow-hidden`}
               style={{ borderColor: 'var(--color-m-border)', backgroundColor: 'var(--color-m-base)' }}
             >
               {activeTab === 'timeline'
@@ -364,8 +367,8 @@ function App() {
             </div>
 
             {/* Right Panel: Chat */}
-            <div className={`flex-col flex-1 ${activeTab === 'chat' ? 'flex' : 'hidden lg:flex'} h-full`} style={s.base}>
-              <main className="flex-1 overflow-y-auto p-5 flex flex-col gap-5 custom-scrollbar">
+            <div className={`flex-col flex-1 min-h-0 ${activeTab === 'chat' ? 'flex' : 'hidden lg:flex'} h-full`} style={s.base}>
+              <main className="flex-1 min-h-0 overflow-y-auto p-5 flex flex-col gap-5 custom-scrollbar">
                 {messages.length === 0 && (
                   <div className="flex flex-col items-center justify-center h-full space-y-4" style={s.muted}>
                     <div className="w-16 h-16 rounded-full flex items-center justify-center animate-pulse" style={s.panel}>

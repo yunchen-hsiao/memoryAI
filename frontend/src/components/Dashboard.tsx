@@ -110,7 +110,7 @@ export default function Dashboard({ token }: DashboardProps) {
   const COLORS = ['#7f94a8', '#7a9490', '#8e8fb0', '#9ba8a0', '#8a9099', '#6d8090', '#85a098', '#7c8eaa', '#9698b8'];
 
   return (
-    <div className="h-full flex flex-col gap-6 p-6 overflow-y-auto custom-scrollbar" style={{ backgroundColor: 'var(--color-m-base)', color: 'var(--color-m-text)' }}>
+    <div className="h-full min-h-0 flex flex-col gap-6 p-6 overflow-y-auto custom-scrollbar" style={{ backgroundColor: 'var(--color-m-base)', color: 'var(--color-m-text)' }}>
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-3 sm:gap-4">
         <div className="flex items-center gap-2 sm:gap-3">
           <DashboardIcon size={28} />
