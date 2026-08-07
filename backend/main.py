@@ -288,9 +288,58 @@ def _fetch_chat_memories(user_id: str, memory_ids: set[str]) -> dict[str, dict]:
     if not memory_ids:
         return {}
     response = supabase.table("memories").select(
-        "id, diary_date, diary_time, topic, summary, content, emotion_score, importance_weight"
+        "id, diary_date, diary_time, topic, summary, content, keywords, emotion_score, importance_weight"
     ).eq("user_id", user_id).in_("id", list(memory_ids)).execute()
-    return {str(memory["id"]): memory for memory in (response.data or [])}
+    memories = {}
+    for memory in (response.data or []):
+        # Cross-person filtering needs plaintext keywords; decrypt once and keep alongside the record.
+        memory["decrypted_keywords"] = [
+            decrypt_text(keyword) for keyword in (memory.get("keywords") or [])
+        ]
+        memories[str(memory["id"])] = memory
+    return memories
+
+
+def _filter_cross_person_contamination(
+    ranked_ids: list[str],
+    memories_by_id: dict[str, dict],
+    graph_candidates: dict[str, dict],
+    mentioned_entities: list[dict],
+    all_entities: list[dict],
+) -> list[str]:
+    """
+    Vector search is global and has no notion of "whose event this is", so a semantically
+    similar memory about a different named person can otherwise leak into evidence for the
+    person the user actually asked about (this is exactly the cross-person mixing Graph RAG
+    was introduced to prevent). Graph candidates are already scoped correctly by
+    get_person_connections(); this only needs to guard vector-only candidates.
+    """
+    if not mentioned_entities:
+        return ranked_ids
+
+    mentioned_names = {entity["name"] for entity in mentioned_entities}
+    other_known_names = {
+        entity["name"] for entity in all_entities if entity["name"] not in mentioned_names
+    }
+    if not other_known_names:
+        return ranked_ids
+
+    filtered = []
+    for memory_id in ranked_ids:
+        if memory_id in graph_candidates:
+            filtered.append(memory_id)
+            continue
+        memory = memories_by_id.get(memory_id)
+        if not memory:
+            continue
+        memory_names = set(memory.get("decrypted_keywords") or [])
+        belongs_to_other_person_only = bool(memory_names & other_known_names) and not (
+            memory_names & mentioned_names
+        )
+        if belongs_to_other_person_only:
+            continue
+        filtered.append(memory_id)
+    return filtered
 
 
 def _rank_chat_candidates(
@@ -484,6 +533,9 @@ def chat(request: ChatRequest, current_user = Depends(get_current_user)):
 
         ranked_ids = _rank_chat_candidates(vector_results, graph_candidates)
         memories_by_id = _fetch_chat_memories(user_id, set(ranked_ids))
+        ranked_ids = _filter_cross_person_contamination(
+            ranked_ids, memories_by_id, graph_candidates, mentioned_entities, all_entities
+        )
         evidence_sources = _build_evidence_sources(memories_by_id, ranked_ids)
         memory_context = _build_memory_context(evidence_sources)
         entity_context = _build_entity_context(user_id, mentioned_entities)
@@ -507,11 +559,12 @@ def chat(request: ChatRequest, current_user = Depends(get_current_user)):
 【本輪回應模式】
 {mode_instruction}
 
-【證據與誠實規則】
-1. 「歷史記憶證據」是唯一可當作過去具體事實的資料。凡是根據它提出的具體主張，請在句末附上對應的 [S1]、[S2] 等引用；不要捏造引用。
-2. 請清楚區分：使用者已說／記憶已記錄的事實、你的合理推論、以及無法確認的部分。不能把他人的內心動機說成已知事實。
-3. 人物背景與長期脈絡僅供理解，不能取代有日期的事件證據；若它和事件證據衝突，以事件證據為準。
-4. 若沒有相關歷史證據，直接坦白「我目前沒有找到能支持這個過去判斷的記憶」，不要用空泛心理學填滿答案。
+【證據與誠實規則】(強制遵守，不是建議)
+1. 每當你描述「歷史記憶證據」中某一則具體事件、對話或行為時，該句結尾必須加上對應的 [S1]、[S2] 等引用標記。例如：「他跟你討論健康狀況時回應得較含糊 [S2]。」沒有引用標記的句子，代表你正在做推論或一般陪聊，不能包含只有記憶才會知道的具體細節。
+2. 絕對禁止把 A 的事件、發言或行為，誤植到 B 身上。每則歷史記憶證據開頭的人名／情境即為該事件的真正主角；只能用來描述使用者本次詢問的對象。若某則證據看起來與本次對象無關，直接忽略它，不要硬套用。
+3. 請清楚區分：使用者已說／記憶已記錄的事實（需引用）、你的合理推論（不需引用，但要標明「可能」「或許」等字眼）、以及無法確認的部分。不能把他人的內心動機說成已知事實。
+4. 人物背景與長期脈絡僅供理解，不能取代有日期的事件證據；若它和事件證據衝突，以事件證據為準。
+5. 若沒有相關歷史證據，直接坦白「我目前沒有找到能支持這個過去判斷的記憶」，不要用空泛心理學填滿答案，也不要編造引用。
 
 【回應方式】
 1. 配合使用者此刻的情緒與語氣：她在吐槽或分享時，先接住荒謬點與核心感受；沒有被要求時，不要自動變成教她溝通、叫她冷靜或要求她理解對方的說教機器。
