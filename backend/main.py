@@ -1580,11 +1580,18 @@ def _get_person_analytics_bundle(user_id: str, person_name: str) -> dict:
 
     events = []
     if memory_ids:
-        res = supabase.table("memories").select("id, diary_date, diary_time, topic, summary, emotion_score, importance_weight") \
-            .eq("user_id", user_id) \
-            .in_("id", memory_ids) \
-            .execute()
-        memories_by_id = {str(m["id"]): m for m in (res.data or [])}
+        # 人物歷史可能很長；分批查詢避免把數百／數千個 UUID
+        # 一次放進 PostgREST .in()，造成 URL 過長或請求逾時。
+        memories_by_id = {}
+        batch_size = 100
+        for start in range(0, len(memory_ids), batch_size):
+            batch_ids = memory_ids[start:start + batch_size]
+            res = supabase.table("memories").select("id, diary_date, diary_time, topic, summary, emotion_score, importance_weight") \
+                .eq("user_id", user_id) \
+                .in_("id", batch_ids) \
+                .execute()
+            memories_by_id.update({str(m["id"]): m for m in (res.data or [])})
+
         for c in connections:
             m = memories_by_id.get(str(c.get("memory_id")))
             if not m:

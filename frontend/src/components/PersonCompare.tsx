@@ -83,19 +83,20 @@ export default function PersonCompare({ token }: { token: string | null }) {
       .finally(() => setNamesLoading(false));
   }, [token]);
 
-  useEffect(() => {
-    if (!personA || !personB) return;
-    if (personA === personB) {
-      setError('請選擇兩位不同的人物。');
-      setPersons([]);
-      return;
-    }
+  const samePersonSelection = Boolean(personA && personB && personA === personB);
 
+  useEffect(() => {
+    if (!personA || !personB || personA === personB) return;
+
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
     fetch(
       `${API_BASE}/api/graph/compare?person_a=${encodeURIComponent(personA)}&person_b=${encodeURIComponent(personB)}`,
-      { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+      {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal: controller.signal,
+      }
     )
       .then(res => res.json())
       .then(fetched => {
@@ -106,10 +107,15 @@ export default function PersonCompare({ token }: { token: string | null }) {
         }
       })
       .catch(err => {
+        if (err?.name === 'AbortError') return;
         console.error('Person compare fetch error:', err);
         setError('無法連線至後端以載入人物對比。');
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+
+    return () => controller.abort();
   }, [personA, personB, token]);
 
   const scoreRange = useMemo(() => {
@@ -162,15 +168,17 @@ export default function PersonCompare({ token }: { token: string | null }) {
         </select>
       </div>
 
-      {error && (
-        <p className="text-sm italic" style={{ color: 'var(--color-m-muted)' }}>{error}</p>
+      {(samePersonSelection || error) && (
+        <p className="text-sm italic" style={{ color: 'var(--color-m-muted)' }}>
+          {samePersonSelection ? '請選擇兩位不同的人物。' : error}
+        </p>
       )}
 
       {loading && (
         <p className="text-sm italic" style={{ color: 'var(--color-m-muted)' }}>載入對比資料中...</p>
       )}
 
-      {!loading && !error && persons.length === 2 && (
+      {!loading && !error && !samePersonSelection && persons.length === 2 && (
         <>
           {/* 三格統計並排比較 */}
           <div className="grid grid-cols-2 gap-4">
@@ -219,11 +227,11 @@ export default function PersonCompare({ token }: { token: string | null }) {
               <div className="flex items-center justify-center gap-5 mt-2 text-xs" style={{ color: 'var(--color-m-muted)' }}>
                 <span className="flex items-center gap-1.5">
                   <span className="inline-block w-5 h-0.5" style={{ backgroundColor: '#5cb3a1' }} />
-                  {personA}
+                  {persons[0].name}
                 </span>
                 <span className="flex items-center gap-1.5">
                   <span className="inline-block w-5 h-0.5" style={{ backgroundColor: '#8a88cc' }} />
-                  {personB}
+                  {persons[1].name}
                 </span>
               </div>
               <p className="text-[11px] mt-1" style={{ color: 'var(--color-m-muted)' }}>
