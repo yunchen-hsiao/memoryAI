@@ -219,11 +219,11 @@ export default function PersonCompare({ token }: { token: string | null }) {
               <div className="flex items-center justify-center gap-5 mt-2 text-xs" style={{ color: 'var(--color-m-muted)' }}>
                 <span className="flex items-center gap-1.5">
                   <span className="inline-block w-5 h-0.5" style={{ backgroundColor: '#5cb3a1' }} />
-                  {persons[0].name}
+                  {personA}
                 </span>
                 <span className="flex items-center gap-1.5">
                   <span className="inline-block w-5 h-0.5" style={{ backgroundColor: '#8a88cc' }} />
-                  {persons[1].name}
+                  {personB}
                 </span>
               </div>
               <p className="text-[11px] mt-1" style={{ color: 'var(--color-m-muted)' }}>

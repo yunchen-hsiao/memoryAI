@@ -1574,7 +1574,8 @@ def _get_person_analytics_bundle(user_id: str, person_name: str) -> dict:
     """
     # Neo4j 只回傳結構化資訊（memory_id, date, emotion_score, importance_weight），
     # 不含事件內容明文，需回 Supabase 依 memory_id 查詢並解密取得實際內容。
-    connections = get_person_connections(user_id, person_name)
+    # 分析／對比需要完整人物歷史；聊天 RAG 仍會在呼叫端明確傳入 limit=30。
+    connections = get_person_connections(user_id, person_name, limit=None)
     memory_ids = [c["memory_id"] for c in connections if c.get("memory_id")]
 
     events = []

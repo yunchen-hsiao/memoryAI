@@ -145,24 +145,29 @@ def _create_memory_graph(tx, user_id, memory_id, date_str, keywords, emotion_sco
             memory_id=memory_id, kw=kw, user_id=user_id
         )
 
-def get_person_connections(user_id: str, person_name: str, limit: int = 30, _retry: bool = True) -> list[dict]:
+def get_person_connections(user_id: str, person_name: str, limit: int | None = 30, _retry: bool = True) -> list[dict]:
     """
     查詢某人物的所有相關事件（多跳查詢）。
     只回傳結構化資訊（memory_id, date, emotion_score, importance_weight），
     不含事件內容，呼叫端需另外向 Supabase 查詢 memory_id 對應的記錄並解密。
+
+    limit 預設保留 30 筆，供聊天 RAG 控制上下文大小；人物分析若要完整歷史，
+    可傳入 limit=None，省略 Cypher LIMIT。
     """
     driver = get_driver()
     try:
         with driver.session() as session:
-            result = session.run(
-                """
-                MATCH (u:User {id: $user_id})-[:EXPERIENCED]->(e:Event)-[:MENTIONS]->(k:Keyword {name: $name, user_id: $user_id})
+            limit_clause = "LIMIT $limit" if limit is not None else ""
+            query = f"""
+                MATCH (u:User {{id: $user_id}})-[:EXPERIENCED]->(e:Event)-[:MENTIONS]->(k:Keyword {{name: $name, user_id: $user_id}})
                 RETURN e.id AS memory_id, e.date AS date, e.emotion_score AS emotion_score, e.importance_weight AS importance_weight
                 ORDER BY e.date DESC
-                LIMIT $limit
-                """,
-                user_id=user_id, name=person_name, limit=limit
-            )
+                {limit_clause}
+                """
+            params = {"user_id": user_id, "name": person_name}
+            if limit is not None:
+                params["limit"] = limit
+            result = session.run(query, **params)
             return [dict(record) for record in result]
     except (ServiceUnavailable, SessionExpired):
         if not _retry:
