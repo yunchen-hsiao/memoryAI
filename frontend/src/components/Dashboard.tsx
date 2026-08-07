@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, Brush } from 'recharts';
-import { Brain, TrendingUp, PieChart as PieChartIcon, Calendar, Heart, Sparkles, Network, BookOpen, Users, ArrowLeftRight } from 'lucide-react';
+import { Brain, TrendingUp, PieChart as PieChartIcon, Calendar, Heart, Sparkles, Network, BookOpen, ArrowLeftRight } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import MemoryGraph from './MemoryGraph';
 import RelationshipHeatmap from './RelationshipHeatmap';
-import PersonOverview from './PersonOverview';
 import PersonCompare from './PersonCompare';
 import { DashboardIcon } from './Icons';
 
@@ -317,30 +316,6 @@ export default function Dashboard({ token }: DashboardProps) {
         )}
       </div>
 
-      {/* Person Overview Card */}
-      <div className="rounded-2xl p-6 shadow-lg" style={{ backgroundColor: 'var(--color-m-panel)', border: '1px solid var(--color-m-border)' }}>
-        <div className="flex items-center gap-2 mb-2" style={{ color: 'var(--color-m-text)' }}>
-          <Users className="w-5 h-5" style={{ color: 'var(--color-m-accent2)' }} />
-          <h3 className="text-lg font-semibold">人物總覽 (誰在陪伴你，誰在消耗你)</h3>
-        </div>
-        <p className="text-sm mb-5" style={{ color: 'var(--color-m-muted)' }}>
-          一次看所有人物的互動頻率、平均情緒與趨勢方向，切換象限圖或表格檢視。
-        </p>
-        <PersonOverview token={token} />
-      </div>
-
-      {/* Person Compare Card */}
-      <div className="rounded-2xl p-6 shadow-lg" style={{ backgroundColor: 'var(--color-m-panel)', border: '1px solid var(--color-m-border)' }}>
-        <div className="flex items-center gap-2 mb-2" style={{ color: 'var(--color-m-text)' }}>
-          <ArrowLeftRight className="w-5 h-5" style={{ color: 'var(--color-m-accent3)' }} />
-          <h3 className="text-lg font-semibold">人物對比</h3>
-        </div>
-        <p className="text-sm mb-5" style={{ color: 'var(--color-m-muted)' }}>
-          選兩位人物，並排比較互動頻率、平均情緒、平均重要度，以及各自的情緒轉折點。
-        </p>
-        <PersonCompare token={token} />
-      </div>
-
       {/* Memory Graph Card */}
       <div className="rounded-2xl p-6 shadow-lg flex flex-col" style={{ minHeight: '600px', backgroundColor: 'var(--color-m-panel)', border: '1px solid var(--color-m-border)' }}>
         <div className="flex items-center gap-2 mb-4" style={{ color: 'var(--color-m-text)' }}>
@@ -362,6 +337,18 @@ export default function Dashboard({ token }: DashboardProps) {
           每一列是一個人，每一格是那個月跟他互動的平均情緒。可以看出關係隨時間的升溫或降溫。
         </p>
         <RelationshipHeatmap token={token} />
+      </div>
+
+      {/* Person Compare Card */}
+      <div className="rounded-2xl p-6 shadow-lg" style={{ backgroundColor: 'var(--color-m-panel)', border: '1px solid var(--color-m-border)' }}>
+        <div className="flex items-center gap-2 mb-2" style={{ color: 'var(--color-m-text)' }}>
+          <ArrowLeftRight className="w-5 h-5" style={{ color: 'var(--color-m-accent3)' }} />
+          <h3 className="text-lg font-semibold">人物對比</h3>
+        </div>
+        <p className="text-sm mb-5" style={{ color: 'var(--color-m-muted)' }}>
+          選兩位人物，並排比較互動頻率、平均情緒、平均重要度，以及各自的情緒轉折點。
+        </p>
+        <PersonCompare token={token} />
       </div>
 
       <div className="flex flex-col gap-6">
