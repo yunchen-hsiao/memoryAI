@@ -1494,6 +1494,14 @@ def get_person_overview(current_user = Depends(get_current_user)):
             scored = [s for s in chronological_scores if s is not None]
 
             direction = compute_trend_direction(chronological_scores)
+            # 與趨勢方向採用同一套「前半段 vs 後半段」基準，額外回傳幅度，
+            # 讓總覽可以找出最明顯的升溫／降溫關係，而不是只顯示箭頭。
+            trend_delta = None
+            if len(scored) >= 2:
+                midpoint = len(scored) // 2
+                first_average = sum(scored[:midpoint]) / midpoint
+                second_average = sum(scored[midpoint:]) / len(scored[midpoint:])
+                trend_delta = round(second_average - first_average, 1)
             dates = [m["diary_date"] for m in related if m.get("diary_date")]
 
             persons.append({
@@ -1504,6 +1512,7 @@ def get_person_overview(current_user = Depends(get_current_user)):
                 "last_date": max(dates) if dates else None,
                 "trend_direction": direction,
                 "trend_label": trend_label(direction),
+                "trend_delta": trend_delta,
             })
 
         # 互動次數多的人物排在前面，與其他人物分析頁的排序邏輯一致
@@ -1591,9 +1600,25 @@ def _get_person_analytics_bundle(user_id: str, person_name: str) -> dict:
     # get_person_connections 原本回傳新→舊，這裡明確反轉，避免順序假設出錯。
     events.sort(key=lambda e: e.get("date") or "")
 
-    entity_res = supabase.table("entities").select("updated_at") \
-        .eq("user_id", user_id).eq("name", person_name).limit(1).execute()
-    profile_updated_at = (entity_res.data or [{}])[0].get("updated_at") if entity_res.data else None
+    # 新版資料庫會用 updated_at 顯示人物側寫的新鮮度；既有部署若尚未
+    # 執行 migration，PostgREST 會在欄位不存在時拋錯。這個附加資訊不能讓
+    # 人物詳情或對比功能整頁失敗，因此依序降級至 created_at，再回傳 None。
+    profile_updated_at = None
+    try:
+        entity_res = supabase.table("entities").select("updated_at") \
+            .eq("user_id", user_id).eq("name", person_name).limit(1).execute()
+        profile_updated_at = (entity_res.data or [{}])[0].get("updated_at") if entity_res.data else None
+    except Exception as updated_at_error:
+        print(
+            "⚠️ entities.updated_at 無法讀取，人物側寫新鮮度將改用 created_at 或略過："
+            f" {updated_at_error}"
+        )
+        try:
+            entity_res = supabase.table("entities").select("created_at") \
+                .eq("user_id", user_id).eq("name", person_name).limit(1).execute()
+            profile_updated_at = (entity_res.data or [{}])[0].get("created_at") if entity_res.data else None
+        except Exception as created_at_error:
+            print(f"⚠️ entities.created_at 也無法讀取，略過人物側寫新鮮度： {created_at_error}")
 
     co_mentions = get_co_mentioned_keywords(user_id, person_name)
     scores = [e["emotion_score"] for e in events if e.get("emotion_score") is not None]
