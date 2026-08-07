@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { ArrowLeftRight, Sparkles } from 'lucide-react';
 import { emotionColor } from '../lib/emotionColor';
 
@@ -211,12 +211,24 @@ export default function PersonCompare({ token }: { token: string | null }) {
                       contentStyle={{ backgroundColor: 'var(--color-m-panel-alt)', borderColor: 'var(--color-m-border)', borderRadius: '8px' }}
                       labelFormatter={(m: any) => formatMonth(String(m))}
                     />
-                    <Legend formatter={(value: any) => (value === 'a' ? persons[0].name : persons[1].name)} />
-                    <Line type="monotone" dataKey="a" name={persons[0].name} stroke="#5cb3a1" strokeWidth={2} dot={{ r: 2 }} connectNulls />
-                    <Line type="monotone" dataKey="b" name={persons[1].name} stroke="#8a88cc" strokeWidth={2} dot={{ r: 2 }} connectNulls />
+                    <Line type="monotone" dataKey="a" name={persons[0].name} stroke="#5cb3a1" strokeWidth={2} dot={{ r: 2 }} connectNulls={false} />
+                    <Line type="monotone" dataKey="b" name={persons[1].name} stroke="#8a88cc" strokeWidth={2} dot={{ r: 2 }} connectNulls={false} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
+              <div className="flex items-center justify-center gap-5 mt-2 text-xs" style={{ color: 'var(--color-m-muted)' }}>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block w-5 h-0.5" style={{ backgroundColor: '#5cb3a1' }} />
+                  {persons[0].name}
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block w-5 h-0.5" style={{ backgroundColor: '#8a88cc' }} />
+                  {persons[1].name}
+                </span>
+              </div>
+              <p className="text-[11px] mt-1" style={{ color: 'var(--color-m-muted)' }}>
+                每個點代表該人物該月有情緒分數的互動平均；{persons.map(person => `${person.name} 有 ${person.monthly_series.length} 個月的可用資料`).join('；')}。沒有點代表該月沒有可用資料，不代表情緒為 0 分。
+              </p>
             </div>
           )}
 
