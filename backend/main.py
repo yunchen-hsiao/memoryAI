@@ -250,145 +250,276 @@ def get_dashboard_stats(current_user = Depends(get_current_user)):
         print(f"Error fetching dashboard stats: {e}")
         return {"error": str(e)}
 
+CHAT_SOURCE_LIMIT = 8
+CHAT_SOURCE_CONTEXT_LIMIT = 700
+CHAT_CONTEXT_CHAR_BUDGET = 5_600
+
+
 def get_embedding(text: str) -> list[float]:
-    """呼叫 Gemini 產生文字的向量 (Embedding)"""
+    """呼叫 Gemini 產生文字的向量 (Embedding)。"""
     response = client.models.embed_content(
         model="gemini-embedding-001",
         contents=text,
-        config=types.EmbedContentConfig(
-            task_type="RETRIEVAL_QUERY" # 搜尋用的 Task Type
-        )
+        config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
     )
     return response.embeddings[0].values
+
+
+def _compact_chat_text(text: str, limit: int) -> str:
+    """Keep source excerpts readable while enforcing a deterministic context budget."""
+    normalized = " ".join((text or "").replace("\r", "\n").split())
+    return normalized if len(normalized) <= limit else f"{normalized[:limit].rstrip()}…"
+
+
+def _fetch_chat_memories(user_id: str, memory_ids: set[str]) -> dict[str, dict]:
+    """Fetch the encrypted source text only for already-selected retrieval candidates."""
+    if not memory_ids:
+        return {}
+    response = supabase.table("memories").select(
+        "id, diary_date, diary_time, topic, summary, content, emotion_score, importance_weight"
+    ).eq("user_id", user_id).in_("id", list(memory_ids)).execute()
+    return {str(memory["id"]): memory for memory in (response.data or [])}
+
+
+def _rank_chat_candidates(
+    vector_results: list[dict], graph_candidates: dict[str, dict]
+) -> list[str]:
+    """
+    Merge semantic and graph evidence instead of letting either retrieval mode erase the other.
+    Ranking uses source-local rank (robust across different score distributions), graph event
+    importance, and a small graph-only bonus so an entity's timeline remains available.
+    """
+    vector_rank = {
+        str(item["id"]): index
+        for index, item in enumerate(vector_results)
+        if item.get("id")
+    }
+    candidate_ids = set(vector_rank) | set(graph_candidates)
+    vector_count = max(len(vector_rank), 1)
+    graph_count = max(len(graph_candidates), 1)
+
+    scored: list[tuple[float, str]] = []
+    for memory_id in candidate_ids:
+        score = 0.0
+        if memory_id in vector_rank:
+            semantic_rank_score = 1 - (vector_rank[memory_id] / vector_count)
+            score += 0.75 * semantic_rank_score
+        if memory_id in graph_candidates:
+            graph = graph_candidates[memory_id]
+            graph_rank_score = 1 - (graph["rank"] / graph_count)
+            importance = max(0, min(float(graph.get("importance") or 3), 5)) / 5
+            score += 0.25 * graph_rank_score + 0.10 * importance
+        scored.append((score, memory_id))
+
+    return [memory_id for _, memory_id in sorted(scored, reverse=True)[:CHAT_SOURCE_LIMIT]]
+
+
+def _build_evidence_sources(memories_by_id: dict[str, dict], ranked_ids: list[str]) -> list[dict]:
+    """Decrypt selected memory cards and build separate model/UI-safe evidence excerpts."""
+    sources: list[dict] = []
+    used_chars = 0
+    for memory_id in ranked_ids:
+        memory = memories_by_id.get(memory_id)
+        if not memory or used_chars >= CHAT_CONTEXT_CHAR_BUDGET:
+            continue
+
+        topic = decrypt_text(memory.get("topic", "")) or "未分類事件"
+        summary = decrypt_text(memory.get("summary", ""))
+        source_text = decrypt_text(memory.get("content", "")) or summary
+        remaining = CHAT_CONTEXT_CHAR_BUDGET - used_chars
+        context_excerpt = _compact_chat_text(
+            source_text, min(CHAT_SOURCE_CONTEXT_LIMIT, remaining)
+        )
+        if not context_excerpt:
+            continue
+
+        source_number = len(sources) + 1
+        used_chars += len(context_excerpt)
+        sources.append({
+            "citation": f"S{source_number}",
+            "memory_id": memory_id,
+            "date": memory.get("diary_date"),
+            "diary_time": memory.get("diary_time"),
+            "topic": topic,
+            "summary": _compact_chat_text(summary, 240),
+            "excerpt": _compact_chat_text(source_text, 360),
+            "context_excerpt": context_excerpt,
+        })
+    return sources
+
+
+def _build_entity_context(user_id: str, mentioned_entities: list[dict]) -> str:
+    """Person profiles are useful background, but never replace dated event evidence."""
+    if not mentioned_entities:
+        return ""
+
+    lines = ["【人物背景（輔助脈絡，不是事件證據）】"]
+    for entity in mentioned_entities:
+        name = entity.get("name", "未命名人物")
+        relationship = _compact_chat_text(entity.get("relationship", ""), 100)
+        description = _compact_chat_text(entity.get("description", ""), 280)
+        lines.append(f"- {name}｜關係：{relationship or '未編譯'}")
+        if description:
+            lines.append(f"  人物檔案：{description}")
+
+        if _neo4j_available:
+            try:
+                co_keywords = get_co_mentioned_keywords(user_id, name, limit=3)
+                names = [item.get("name") for item in co_keywords if item.get("name")]
+                if names:
+                    lines.append(f"  常見共現：{', '.join(names)}")
+            except Exception as graph_error:
+                print(f"⚠️ 讀取 {name} 的圖譜共現關係失敗：{graph_error}")
+    return "\n".join(lines)
+
+
+def _build_memory_context(sources: list[dict]) -> str:
+    if not sources:
+        return "【歷史記憶證據】\n本次沒有找到足以支持特定歷史判斷的記憶。"
+
+    lines = ["【歷史記憶證據】"]
+    for source in sources:
+        time_text = f" {source['diary_time']}" if source.get("diary_time") else ""
+        lines.extend([
+            f"[{source['citation']}] {source['date']}{time_text}｜{source['topic']}",
+            f"摘要：{source['summary'] or '（無摘要）'}",
+            f"原文片段：{source['context_excerpt']}",
+        ])
+    return "\n".join(lines)
+
 
 @app.post("/api/chat")
 def chat(request: ChatRequest, current_user = Depends(get_current_user)):
     try:
-        # 1. 抓取並解密目前所有的核心實體檔案，同時做人物解析
+        user_id = str(current_user.id)
+
+        # 1. 人物精確比對：保留既有的全名/手動別名設計，不擅自猜測新別名。
         entities_res = supabase.table("entities").select("*").eq("user_id", current_user.id).execute()
         all_entities = entities_res.data or []
-        for e in all_entities:
-            e['relationship'] = decrypt_text(e.get('relationship', ''))
-            e['description'] = decrypt_text(e.get('description', ''))
-            # aliases 為明文陣列，不需解密；name 本身也一直是明文
-
+        for entity in all_entities:
+            entity["relationship"] = decrypt_text(entity.get("relationship", ""))
+            entity["description"] = decrypt_text(entity.get("description", ""))
         mentioned_entities = resolve_mentioned_entities(request.message, all_entities)
 
-        # 2. 圖優先檢索：命中人物時，用 Neo4j 圖譜鎖定該人物相關的 memory_id 範圍，
-        #    避免不同人物的相似情境事件互相混淆；沒命中或圖查詢失敗則 fallback 至全域向量搜尋。
-        search_results_data = []
-        used_graph = False
-
+        # 2. Graph retrieval：命中人物時取得其事件時間線；仍會與向量結果合併。
+        graph_candidates: dict[str, dict] = {}
         if mentioned_entities and _neo4j_available:
             try:
-                seen_ids = set()
-                for e in mentioned_entities:
-                    connections = get_person_connections(str(current_user.id), e['name'], limit=30)
-                    for c in connections:
-                        mem_id = c.get('memory_id')
-                        if mem_id:
-                            seen_ids.add(mem_id)
+                for entity in mentioned_entities:
+                    connections = get_person_connections(user_id, entity["name"], limit=30)
+                    for rank, connection in enumerate(connections):
+                        memory_id = str(connection.get("memory_id") or "")
+                        if not memory_id:
+                            continue
+                        candidate = {
+                            "rank": rank,
+                            "importance": connection.get("importance_weight"),
+                        }
+                        existing = graph_candidates.get(memory_id)
+                        if not existing or candidate["rank"] < existing["rank"]:
+                            graph_candidates[memory_id] = candidate
+            except Exception as graph_error:
+                print(f"⚠️ Graph retrieval 失敗，將只使用向量檢索：{graph_error}")
 
-                if seen_ids:
-                    mem_res = supabase.table("memories").select("id, summary, topic, diary_date, diary_time") \
-                        .eq("user_id", current_user.id) \
-                        .in_("id", list(seen_ids)) \
-                        .order("diary_date", desc=True) \
-                        .limit(20).execute()
-                    search_results_data = mem_res.data or []
-                    used_graph = True
-            except Exception as graph_e:
-                print(f"⚠️ Graph 查詢失敗，fallback 至向量搜尋: {graph_e}")
-
-        if not used_graph:
-            # 全域向量相似度搜尋（未命中人物，或圖查詢失敗/查無結果時的 fallback）
+        # 3. Vector retrieval：即使有圖譜命中仍照常執行，補到情境上相似的舊事件。
+        vector_results: list[dict] = []
+        try:
             query_embedding = get_embedding(request.message)
-            search_results = supabase.rpc(
-                'search_memories',
+            vector_response = supabase.rpc(
+                "search_memories",
                 {
-                    'query_embedding': query_embedding,
-                    'match_threshold': 0.4, # 相似度門檻
-                    'match_count': 5,      # 最多取 5 筆最相關的
-                    'p_user_id': current_user.id, # 確保只搜尋自己的記憶
-                    'time_weight_factor': 0.2 # 時間衰減權重 (0.2 表示輕微偏好近期的記憶)
+                    "query_embedding": query_embedding,
+                    "match_threshold": 0.4,
+                    "match_count": 12,
+                    "p_user_id": current_user.id,
+                    "time_weight_factor": 0.2,
                 }
             ).execute()
-            search_results_data = search_results.data or []
+            vector_results = vector_response.data or []
+        except Exception as vector_error:
+            # Graph evidence can still support the answer when embeddings are temporarily unavailable.
+            print(f"⚠️ Vector retrieval 失敗，將只使用圖譜證據：{vector_error}")
 
-        # 2.5 核心人物檔案與圖譜共現關聯（GraphRAG Context）
-        entity_context = ""
-        if mentioned_entities:
-            entity_context = "\n【核心人物檔案與圖譜關聯 (GraphRAG Context)】\n系統偵測到使用者提及了以下核心人物，請參考他們的人設與圖譜關係：\n"
-            for e in mentioned_entities:
-                entity_context += f"👤 {e['name']} (關係：{e['relationship']})\n"
-                entity_context += f"   行為分析：{e['description']}\n"
+        ranked_ids = _rank_chat_candidates(vector_results, graph_candidates)
+        memories_by_id = _fetch_chat_memories(user_id, set(ranked_ids))
+        evidence_sources = _build_evidence_sources(memories_by_id, ranked_ids)
+        memory_context = _build_memory_context(evidence_sources)
+        entity_context = _build_entity_context(user_id, mentioned_entities)
 
-                if _neo4j_available:
-                    try:
-                        co_keywords = get_co_mentioned_keywords(str(current_user.id), e['name'], limit=3)
-                        if co_keywords:
-                            names = [k['name'] for k in co_keywords]
-                            entity_context += f"   🔗 圖譜共現：最常與「{', '.join(names)}」一起出現在記憶中\n"
-                    except Exception as graph_e:
-                        print(f"Graph fetch error for {e['name']}: {graph_e}")
-
-        # 3. 整理記憶上下文
-        memory_context = ""
-        if search_results_data:
-            memory_context = "【系統擷取到的相關歷史記憶】\n"
-            for mem in search_results_data:
-                mem['summary'] = decrypt_text(mem.get('summary', ''))
-                mem['topic'] = decrypt_text(mem.get('topic', ''))
-                time_str = f" {mem.get('diary_time', '')}" if mem.get('diary_time') else ""
-                memory_context += f"- 日期：{mem['diary_date']}{time_str} (主題：{mem['topic']})\n"
-                memory_context += f"  記憶細節：{mem['summary']}\n"
-            memory_context += "\n請根據以上歷史記憶，如果記憶內容與使用者的問題或當前對話上下文相關，就自然地融入對話中回答，展現出「你記得這些事」的陪伴感。如果無關，則正常對話即可，不需要刻意提及記憶。\n\n"
-        else:
-            print("=> 沒有找到相關的記憶。")
-            
-        # 4. Get current time for dynamic time perception
+        # 4. Long-term context is explicitly secondary to dated event evidence.
+        life_context = _compact_chat_text(get_user_context(user_id), 650)
         current_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
         system_instruction = f"""
-        你是一個敏銳、重視邏輯，但說話風格像是一個「亦師亦友的高階幕僚」或「專屬架構師」。
-        你的任務是幫使用者分析他們與他人的互動，拆解對方的行為模式與潛在邏輯。
-        
-        【回應風格準則】：
-        1. 保持理性與客觀的分析，不需要過度煽情的安慰，但語氣請保持「自然、幽默、帶有人情味」，像一個聰明的朋友在跟你討論，絕對不要聽起來像冷冰冰的報告機器人。
-        2. 善用條列式、結構化的方式拆解分析（例如：推測對方心理、行為動機、情境推測）。
-        3. 可以適度穿插一些資訊/系統術語來比喻人類行為（例如：批次處理、休眠模式、Ping），作為一種有趣的幽默感，但不要滿口生硬的醫學或電腦專有名詞。
-        4. 根據使用者提供的互動細節，給出具體且實用的「處置建議」或「下一步對策」。
-        
-        目前系統的絕對時間為：{current_time_str}。請以此時間為基準來理解「今天」、「昨天」等時間差。
-        請用繁體中文回答。
-        
-        {entity_context}
-        {memory_context}
-        """
-        
-        # Format history (只保留最近的 15 筆對話，避免對話過長耗盡 Token)
-        formatted_history = []
-        recent_history = request.history[-15:] if len(request.history) > 15 else request.history
-        for msg in recent_history:
-            role = "user" if msg["role"] == "user" else "assistant"
-            formatted_history.append({"role": role, "content": msg["content"]})
-            
-        # chat_session = client.chats.create(
-        #     model='gemini-2.5-flash',
-        #     config=genai.types.GenerateContentConfig(
-        #         system_instruction=system_instruction
-        #     ),
-        #     history=formatted_history
-        # )
-        
-        messages = [{"role": "system", "content": system_instruction}] + formatted_history + [{"role": "user", "content": request.message}]
-        response = co.chat(model="command-r-08-2024", messages=messages, max_tokens=4000)
-        return {"reply": response.message.content[0].text}
+你是使用者的 MemoryAI：一個記得她故事、能一起拆解情境的聰明好友與幕僚。
+你的首要責任不是提供萬用諮商建議，而是先聽懂使用者現在是在分享、吐槽、求判讀，還是明確要下一步策略。
 
-    except Exception as e:
+【證據與誠實規則】
+1. 「歷史記憶證據」是唯一可當作過去具體事實的資料。凡是根據它提出的具體主張，請在句末附上對應的 [S1]、[S2] 等引用；不要捏造引用。
+2. 請清楚區分：使用者已說／記憶已記錄的事實、你的合理推論、以及無法確認的部分。不能把他人的內心動機說成已知事實。
+3. 人物背景與長期脈絡僅供理解，不能取代有日期的事件證據；若它和事件證據衝突，以事件證據為準。
+4. 若沒有相關歷史證據，直接坦白「我目前沒有找到能支持這個過去判斷的記憶」，不要用空泛心理學填滿答案。
+
+【回應方式】
+1. 配合使用者此刻的情緒與語氣：她在吐槽或分享時，先接住荒謬點與核心感受；沒有被要求時，不要自動變成教她溝通、叫她冷靜或要求她理解對方的說教機器。
+2. 可以自然、幽默、帶有人情味，也可少量使用系統比喻；不要為了風格硬塞術語或誇大成戰報。
+3. 若需要分析，先從具體行為與時間線下手，再提出「可能」的解讀。若使用者要求建議，再給少量、符合她已設下邊界的可執行選項。
+4. 回答可用短段落或條列，但避免例行公事般的「猜測心理／建議對策」模板。
+5. 一律使用繁體中文。
+
+目前系統時間：{current_time_str}
+
+{entity_context}
+
+【長期脈絡（可能過時，僅作輔助）】
+{life_context}
+
+{memory_context}
+"""
+
+        # 只保留近期對話，並只轉送模型真正需要的 role/content 欄位。
+        formatted_history = []
+        for message in request.history[-15:]:
+            content = message.get("content", "")
+            if not content:
+                continue
+            role = "user" if message.get("role") == "user" else "assistant"
+            formatted_history.append({"role": role, "content": content})
+
+        messages = (
+            [{"role": "system", "content": system_instruction}]
+            + formatted_history
+            + [{"role": "user", "content": request.message}]
+        )
+        response = co.chat(model="command-r-08-2024", messages=messages, max_tokens=4000)
+
+        # context_excerpt is solely for the model; never return the longer version to the browser.
+        public_sources = [
+            {
+                key: source[key]
+                for key in ("citation", "memory_id", "date", "diary_time", "topic", "summary", "excerpt")
+            }
+            for source in evidence_sources
+        ]
+        retrieval_modes = []
+        if graph_candidates:
+            retrieval_modes.append("graph")
+        if vector_results:
+            retrieval_modes.append("vector")
+
+        return {
+            "reply": response.message.content[0].text,
+            "sources": public_sources,
+            "retrieval": {
+                "mode": "+".join(retrieval_modes) or "none",
+                "source_count": len(public_sources),
+                "mentioned_entities": [entity["name"] for entity in mentioned_entities],
+            },
+        }
+
+    except Exception as error:
         import traceback
         traceback.print_exc()
-        return {"error": str(e)}
+        return {"error": str(error)}
 
 @app.get("/api/dashboard/graph")
 def get_dashboard_graph(current_user = Depends(get_current_user)):

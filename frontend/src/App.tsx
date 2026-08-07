@@ -22,12 +22,28 @@ interface SummarizedEvent {
   exact_quote?: string;
 }
 
+interface ChatSource {
+  citation: string;
+  memory_id: string;
+  date: string | null;
+  diary_time: string | null;
+  topic: string;
+  summary: string;
+  excerpt: string;
+}
+
+interface ChatMessage {
+  role: 'user' | 'ai' | 'error';
+  content: string;
+  sources?: ChatSource[];
+}
+
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 function App() {
   const [activeTab, setActiveTab] = useState<'chat' | 'dashboard' | 'timeline' | 'import'>('dashboard')
   const [healthStatus, setHealthStatus] = useState<string>('Checking backend...')
-  const [messages, setMessages] = useState<{ role: string, content: string }[]>([])
+  const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isSummarizing, setIsSummarizing] = useState(false)
@@ -88,7 +104,7 @@ function App() {
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
 
-    const userMsg = { role: 'user', content: input }
+    const userMsg: ChatMessage = { role: 'user', content: input }
     const currentHistory = [...messages]
 
     setMessages(prev => [...prev, userMsg])
@@ -108,7 +124,14 @@ function App() {
         })
       })
       const data = await res.json()
-      setMessages(prev => [...prev, { role: 'ai', content: data.reply || data.error || '無法取得回應' }])
+      const sources: ChatSource[] | undefined = Array.isArray(data.sources)
+        ? data.sources
+        : undefined
+      setMessages(prev => [...prev, {
+        role: 'ai',
+        content: data.reply || data.error || '無法取得回應',
+        sources
+      }])
     } catch (err) {
       setMessages(prev => [...prev, { role: 'error', content: '網路錯誤，請稍後再試。' }])
     } finally {
@@ -380,24 +403,55 @@ function App() {
 
                 {messages.map((msg, i) => (
                   <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div
-                      className={`max-w-[85%] lg:max-w-[75%] p-4 rounded-2xl leading-relaxed shadow-sm ${
-                        msg.role === 'user' ? 'rounded-br-sm' :
-                        msg.role === 'error' ? 'rounded-bl-sm' :
-                        'rounded-bl-sm pl-5'
-                      }`}
-                      style={
-                        msg.role === 'user' ? s.userBubble :
-                        msg.role === 'error' ? { backgroundColor: 'rgba(180,80,80,0.15)', color: '#c09090', border: '1px solid rgba(180,80,80,0.3)' } :
-                        s.aiBubble
-                      }
-                    >
-                      {msg.role === 'ai' ? (
-                        <div className="prose max-w-none prose-p:leading-relaxed" style={{ color: 'var(--color-m-text)' }}>
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                        </div>
-                      ) : (
-                        msg.content
+                    <div className="max-w-[85%] lg:max-w-[75%]">
+                      <div
+                        className={`p-4 rounded-2xl leading-relaxed shadow-sm ${
+                          msg.role === 'user' ? 'rounded-br-sm' :
+                          msg.role === 'error' ? 'rounded-bl-sm' :
+                          'rounded-bl-sm pl-5'
+                        }`}
+                        style={
+                          msg.role === 'user' ? s.userBubble :
+                          msg.role === 'error' ? { backgroundColor: 'rgba(180,80,80,0.15)', color: '#c09090', border: '1px solid rgba(180,80,80,0.3)' } :
+                          s.aiBubble
+                        }
+                      >
+                        {msg.role === 'ai' ? (
+                          <div className="prose max-w-none prose-p:leading-relaxed" style={{ color: 'var(--color-m-text)' }}>
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                          </div>
+                        ) : (
+                          msg.content
+                        )}
+                      </div>
+
+                      {msg.role === 'ai' && msg.sources && msg.sources.length > 0 && (
+                        <details
+                          className="mt-2 rounded-xl px-3 py-2 text-xs"
+                          style={{ backgroundColor: 'var(--color-m-panel-alt)', border: '1px solid var(--color-m-border)', color: 'var(--color-m-muted)' }}
+                        >
+                          <summary className="cursor-pointer select-none font-medium" style={{ color: 'var(--color-m-accent2)' }}>
+                            參考了 {msg.sources.length} 段記憶證據
+                          </summary>
+                          <ol className="mt-3 space-y-2.5">
+                            {msg.sources.map(source => (
+                              <li
+                                key={`${source.citation}-${source.memory_id}`}
+                                className="rounded-lg p-2.5"
+                                style={{ backgroundColor: 'var(--color-m-panel)', borderLeft: '3px solid var(--color-m-accent1)' }}
+                              >
+                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 font-medium">
+                                  <span style={{ color: 'var(--color-m-accent1)' }}>[{source.citation}]</span>
+                                  <span>{source.date || '日期未記錄'}{source.diary_time ? ` ${source.diary_time}` : ''}</span>
+                                  <span style={{ color: 'var(--color-m-accent2)' }}>{source.topic}</span>
+                                </div>
+                                <p className="mt-1 leading-relaxed" style={{ color: 'var(--color-m-text)' }}>
+                                  {source.excerpt || source.summary || '（此記憶沒有可顯示的文字片段）'}
+                                </p>
+                              </li>
+                            ))}
+                          </ol>
+                        </details>
                       )}
                     </div>
                   </div>
