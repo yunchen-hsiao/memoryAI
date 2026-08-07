@@ -1444,85 +1444,85 @@ def get_relationship_heatmap(current_user = Depends(get_current_user)):
         traceback.print_exc()
         return {"success": False, "error": str(e)}
 
-@app.get("/api/dashboard/person_overview")
-def get_person_overview(current_user = Depends(get_current_user)):
-    """
-    人物總覽：一次回傳「象限圖」與「總覽表」共用的資料。
+# @app.get("/api/dashboard/person_overview")
+# def get_person_overview(current_user = Depends(get_current_user)):
+#     """
+#     人物總覽：一次回傳「象限圖」與「總覽表」共用的資料。
 
-    與 relationship_heatmap 一樣，直接用 Supabase 的 keywords/summary 比對人物，
-    不依賴 Neo4j（Neo4j 目前不可用時，這頁分析仍可正常運作）。
+#     與 relationship_heatmap 一樣，直接用 Supabase 的 keywords/summary 比對人物，
+#     不依賴 Neo4j（Neo4j 目前不可用時，這頁分析仍可正常運作）。
 
-    每位人物回傳：
-      - total_count: 總互動次數（象限圖 X 軸）
-      - avg_score: 平均情緒分數（象限圖 Y 軸）
-      - first_date / last_date: 互動起訖日期
-      - trend_direction / trend_label: 情緒趨勢方向（供總覽表的 ↑/↓/→ 欄位）
-    """
-    try:
-        entities_res = supabase.table("entities").select("name") \
-            .eq("user_id", current_user.id).execute()
-        person_names = [e["name"] for e in (entities_res.data or []) if e.get("name")]
-        if not person_names:
-            return {
-                "success": True, "persons": [],
-                "message": "尚未編譯核心人物檔案，請先執行「編譯核心人物檔案」。"
-            }
+#     每位人物回傳：
+#       - total_count: 總互動次數（象限圖 X 軸）
+#       - avg_score: 平均情緒分數（象限圖 Y 軸）
+#       - first_date / last_date: 互動起訖日期
+#       - trend_direction / trend_label: 情緒趨勢方向（供總覽表的 ↑/↓/→ 欄位）
+#     """
+#     try:
+#         entities_res = supabase.table("entities").select("name") \
+#             .eq("user_id", current_user.id).execute()
+#         person_names = [e["name"] for e in (entities_res.data or []) if e.get("name")]
+#         if not person_names:
+#             return {
+#                 "success": True, "persons": [],
+#                 "message": "尚未編譯核心人物檔案，請先執行「編譯核心人物檔案」。"
+#             }
 
-        mem_res = supabase.table("memories").select("diary_date, emotion_score, keywords, summary") \
-            .eq("user_id", current_user.id).execute()
-        memories = mem_res.data or []
-        if not memories:
-            return {"success": True, "persons": []}
+#         mem_res = supabase.table("memories").select("diary_date, emotion_score, keywords, summary") \
+#             .eq("user_id", current_user.id).execute()
+#         memories = mem_res.data or []
+#         if not memories:
+#             return {"success": True, "persons": []}
 
-        for m in memories:
-            m["keywords"] = [decrypt_text(k) for k in (m.get("keywords") or [])]
-            m["summary"] = decrypt_text(m.get("summary", ""))
+#         for m in memories:
+#             m["keywords"] = [decrypt_text(k) for k in (m.get("keywords") or [])]
+#             m["summary"] = decrypt_text(m.get("summary", ""))
 
-        persons = []
-        for name in person_names:
-            # 與 relationship_heatmap / dashboard stats 一致的比對方式：keywords 或 summary 命中
-            related = [
-                m for m in memories
-                if name in (m.get("keywords") or []) or name in (m.get("summary") or "")
-            ]
-            if not related:
-                continue
+#         persons = []
+#         for name in person_names:
+#             # 與 relationship_heatmap / dashboard stats 一致的比對方式：keywords 或 summary 命中
+#             related = [
+#                 m for m in memories
+#                 if name in (m.get("keywords") or []) or name in (m.get("summary") or "")
+#             ]
+#             if not related:
+#                 continue
 
-            # 依日期由舊到新排序，才能正確判斷「趨勢方向」（前半段 vs 後半段）
-            related.sort(key=lambda m: m.get("diary_date") or "")
-            chronological_scores = [m.get("emotion_score") for m in related]
-            scored = [s for s in chronological_scores if s is not None]
+#             # 依日期由舊到新排序，才能正確判斷「趨勢方向」（前半段 vs 後半段）
+#             related.sort(key=lambda m: m.get("diary_date") or "")
+#             chronological_scores = [m.get("emotion_score") for m in related]
+#             scored = [s for s in chronological_scores if s is not None]
 
-            direction = compute_trend_direction(chronological_scores)
-            # 與趨勢方向採用同一套「前半段 vs 後半段」基準，額外回傳幅度，
-            # 讓總覽可以找出最明顯的升溫／降溫關係，而不是只顯示箭頭。
-            trend_delta = None
-            if len(scored) >= 2:
-                midpoint = len(scored) // 2
-                first_average = sum(scored[:midpoint]) / midpoint
-                second_average = sum(scored[midpoint:]) / len(scored[midpoint:])
-                trend_delta = round(second_average - first_average, 1)
-            dates = [m["diary_date"] for m in related if m.get("diary_date")]
+#             direction = compute_trend_direction(chronological_scores)
+#             # 與趨勢方向採用同一套「前半段 vs 後半段」基準，額外回傳幅度，
+#             # 讓總覽可以找出最明顯的升溫／降溫關係，而不是只顯示箭頭。
+#             trend_delta = None
+#             if len(scored) >= 2:
+#                 midpoint = len(scored) // 2
+#                 first_average = sum(scored[:midpoint]) / midpoint
+#                 second_average = sum(scored[midpoint:]) / len(scored[midpoint:])
+#                 trend_delta = round(second_average - first_average, 1)
+#             dates = [m["diary_date"] for m in related if m.get("diary_date")]
 
-            persons.append({
-                "name": name,
-                "total_count": len(related),
-                "avg_score": round(sum(scored) / len(scored), 1) if scored else None,
-                "first_date": min(dates) if dates else None,
-                "last_date": max(dates) if dates else None,
-                "trend_direction": direction,
-                "trend_label": trend_label(direction),
-                "trend_delta": trend_delta,
-            })
+#             persons.append({
+#                 "name": name,
+#                 "total_count": len(related),
+#                 "avg_score": round(sum(scored) / len(scored), 1) if scored else None,
+#                 "first_date": min(dates) if dates else None,
+#                 "last_date": max(dates) if dates else None,
+#                 "trend_direction": direction,
+#                 "trend_label": trend_label(direction),
+#                 "trend_delta": trend_delta,
+#             })
 
-        # 互動次數多的人物排在前面，與其他人物分析頁的排序邏輯一致
-        persons.sort(key=lambda p: p["total_count"], reverse=True)
+#         # 互動次數多的人物排在前面，與其他人物分析頁的排序邏輯一致
+#         persons.sort(key=lambda p: p["total_count"], reverse=True)
 
-        return {"success": True, "persons": persons}
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {"success": False, "error": str(e)}
+#         return {"success": True, "persons": persons}
+#     except Exception as e:
+#         import traceback
+#         traceback.print_exc()
+#         return {"success": False, "error": str(e)}
 
 @app.get("/api/graph/persons")
 def get_persons_graph(current_user = Depends(get_current_user)):
