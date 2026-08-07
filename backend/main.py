@@ -1,5 +1,7 @@
 import json
 import hashlib
+import re
+from typing import Literal
 from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
@@ -66,9 +68,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+CHAT_RESPONSE_MODES = {"companion", "analysis", "strategy", "memory"}
+CHAT_FEEDBACK_TYPES = {"liked", "too_neutral", "too_speculative", "wrong_memory"}
+
+
 class ChatRequest(BaseModel):
     message: str = ""
     history: list[dict] = []
+    response_mode: Literal["companion", "analysis", "strategy", "memory"] = "analysis"
+
+
+class ChatFeedbackRequest(BaseModel):
+    feedback_type: Literal["liked", "too_neutral", "too_speculative", "wrong_memory"]
+    response_mode: Literal["companion", "analysis", "strategy", "memory"] = "analysis"
 
 # 情緒分數評分準則：統一給所有 AI 抽取事件的 prompt 使用，
 # 避免 AI 僅依「事件表面敘述是否熱烈」機械式地打在 50 分附近，
@@ -388,6 +400,36 @@ def _build_memory_context(sources: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _get_response_feedback_context(user_id: str) -> str:
+    """Turn stored preference signals into concise, non-sensitive system guidance."""
+    try:
+        response = supabase.table("chat_response_feedback").select("feedback_type") \
+            .eq("user_id", user_id).order("created_at", desc=True).limit(40).execute()
+    except Exception as error:
+        # Deployment remains usable until the optional preference migration is installed.
+        if "chat_response_feedback" not in str(error):
+            print(f"⚠️ 讀取聊天回饋偏好失敗：{error}")
+        return ""
+
+    counts: dict[str, int] = {}
+    for row in (response.data or []):
+        feedback_type = row.get("feedback_type")
+        if feedback_type in CHAT_FEEDBACK_TYPES:
+            counts[feedback_type] = counts.get(feedback_type, 0) + 1
+
+    notes = []
+    if counts.get("too_neutral", 0) > 0:
+        notes.append("使用者不喜歡為了中立而替他人合理化；先回應她明確描述的情境與邊界。")
+    if counts.get("too_speculative", 0) > 0:
+        notes.append("使用者不喜歡腦補；推論要保留條件，並和已知事實分開。")
+    if counts.get("wrong_memory", 0) > 0:
+        notes.append("使用者很在意記憶正確性；只引用真正支持說法的 [S#]，不確定就明講。")
+    if counts.get("liked", 0) > 0:
+        notes.append("使用者喜歡有具體脈絡、自然直接且不說教的回覆。")
+
+    return f"【使用者過往回饋偏好】\n- " + "\n- ".join(notes) if notes else ""
+
+
 @app.post("/api/chat")
 def chat(request: ChatRequest, current_user = Depends(get_current_user)):
     try:
@@ -449,9 +491,21 @@ def chat(request: ChatRequest, current_user = Depends(get_current_user)):
         # 4. Long-term context is explicitly secondary to dated event evidence.
         life_context = _compact_chat_text(get_user_context(user_id), 650)
         current_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        mode_instructions = {
+            "companion": "陪我吐槽：先自然接住情緒與荒謬點，像懂脈絡的好友聊天；除非使用者主動要求，不要展開長篇分析或給策略。",
+            "analysis": "冷靜分析：先提出有證據支持的行為／互動模式，再分開說明合理推論與未知處；不要只重述使用者的話或退回泛用安慰。",
+            "strategy": "幫我想下一步：先用簡短證據說明判斷前提，再給 2～3 個可選且尊重使用者既有邊界的行動方案。",
+            "memory": "查記憶：以日期、人物、事件時間線回答；只陳述能被證據支持的內容，不做人格分析、讀心或建議。",
+        }
+        response_mode = request.response_mode if request.response_mode in CHAT_RESPONSE_MODES else "analysis"
+        mode_instruction = mode_instructions[response_mode]
+        feedback_context = _get_response_feedback_context(user_id)
         system_instruction = f"""
 你是使用者的 MemoryAI：一個記得她故事、能一起拆解情境的聰明好友與幕僚。
 你的首要責任不是提供萬用諮商建議，而是先聽懂使用者現在是在分享、吐槽、求判讀，還是明確要下一步策略。
+
+【本輪回應模式】
+{mode_instruction}
 
 【證據與誠實規則】
 1. 「歷史記憶證據」是唯一可當作過去具體事實的資料。凡是根據它提出的具體主張，請在句末附上對應的 [S1]、[S2] 等引用；不要捏造引用。
@@ -467,6 +521,8 @@ def chat(request: ChatRequest, current_user = Depends(get_current_user)):
 5. 一律使用繁體中文。
 
 目前系統時間：{current_time_str}
+
+{feedback_context}
 
 {entity_context}
 
@@ -491,14 +547,18 @@ def chat(request: ChatRequest, current_user = Depends(get_current_user)):
             + [{"role": "user", "content": request.message}]
         )
         response = co.chat(model="command-r-08-2024", messages=messages, max_tokens=4000)
+        reply_text = response.message.content[0].text
 
-        # context_excerpt is solely for the model; never return the longer version to the browser.
+        # Display only sources the model actually cited. Retrieval candidates are not evidence
+        # until the reply makes a claim tied to their [S#] marker.
+        cited_sources = set(re.findall(r"\[(S\d+)\]", reply_text))
         public_sources = [
             {
                 key: source[key]
                 for key in ("citation", "memory_id", "date", "diary_time", "topic", "summary", "excerpt")
             }
             for source in evidence_sources
+            if source["citation"] in cited_sources
         ]
         retrieval_modes = []
         if graph_candidates:
@@ -507,8 +567,9 @@ def chat(request: ChatRequest, current_user = Depends(get_current_user)):
             retrieval_modes.append("vector")
 
         return {
-            "reply": response.message.content[0].text,
+            "reply": reply_text,
             "sources": public_sources,
+            "response_mode": response_mode,
             "retrieval": {
                 "mode": "+".join(retrieval_modes) or "none",
                 "source_count": len(public_sources),
@@ -520,6 +581,25 @@ def chat(request: ChatRequest, current_user = Depends(get_current_user)):
         import traceback
         traceback.print_exc()
         return {"error": str(error)}
+
+
+@app.post("/api/chat/feedback")
+def record_chat_feedback(feedback: ChatFeedbackRequest, current_user = Depends(get_current_user)):
+    """Persist only a coarse preference signal; never store chat text or source excerpts here."""
+    try:
+        supabase.table("chat_response_feedback").insert({
+            "user_id": current_user.id,
+            "feedback_type": feedback.feedback_type,
+            "response_mode": feedback.response_mode,
+        }).execute()
+        return {"success": True}
+    except Exception as error:
+        import traceback
+        traceback.print_exc()
+        return {
+            "success": False,
+            "error": "無法記錄回饋；請確認已執行 chat_response_feedback migration。",
+        }
 
 @app.get("/api/dashboard/graph")
 def get_dashboard_graph(current_user = Depends(get_current_user)):

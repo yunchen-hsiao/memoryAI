@@ -163,3 +163,27 @@ create policy "memory_imports_insert_own" on public.memory_imports
   for insert with check (auth.uid() = user_id);
 create policy "memory_imports_delete_own" on public.memory_imports
   for delete using (auth.uid() = user_id);
+
+-- Store coarse chat-response preferences without retaining chat text or memory excerpts.
+create table chat_response_feedback (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  feedback_type text not null check (
+    feedback_type in ('liked', 'too_neutral', 'too_speculative', 'wrong_memory')
+  ),
+  response_mode text not null check (
+    response_mode in ('companion', 'analysis', 'strategy', 'memory')
+  ),
+  created_at timestamp with time zone default timezone('utc'::text, now())
+);
+
+create index chat_response_feedback_user_created_idx
+  on chat_response_feedback (user_id, created_at desc);
+
+alter table public.chat_response_feedback enable row level security;
+create policy "chat_response_feedback_select_own" on public.chat_response_feedback
+  for select using (auth.uid() = user_id);
+create policy "chat_response_feedback_insert_own" on public.chat_response_feedback
+  for insert with check (auth.uid() = user_id);
+create policy "chat_response_feedback_delete_own" on public.chat_response_feedback
+  for delete using (auth.uid() = user_id);

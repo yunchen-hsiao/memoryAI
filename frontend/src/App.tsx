@@ -32,10 +32,33 @@ interface ChatSource {
   excerpt: string;
 }
 
+type ResponseMode = 'companion' | 'analysis' | 'strategy' | 'memory';
+type ChatFeedbackType = 'liked' | 'too_neutral' | 'too_speculative' | 'wrong_memory';
+
+interface ChatFeedbackOption {
+  value: ChatFeedbackType;
+  label: string;
+}
+
+const RESPONSE_MODE_OPTIONS: { value: ResponseMode; label: string }[] = [
+  { value: 'companion', label: '陪我吐槽' },
+  { value: 'analysis', label: '冷靜分析' },
+  { value: 'strategy', label: '幫我想下一步' },
+  { value: 'memory', label: '查記憶' },
+];
+
+const CHAT_FEEDBACK_OPTIONS: ChatFeedbackOption[] = [
+  { value: 'liked', label: '這種語氣' },
+  { value: 'too_neutral', label: '太中立' },
+  { value: 'too_speculative', label: '太腦補' },
+  { value: 'wrong_memory', label: '記錯了' },
+];
+
 interface ChatMessage {
   role: 'user' | 'ai' | 'error';
   content: string;
   sources?: ChatSource[];
+  feedback?: ChatFeedbackType;
 }
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -44,6 +67,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<'chat' | 'dashboard' | 'timeline' | 'import'>('dashboard')
   const [healthStatus, setHealthStatus] = useState<string>('Checking backend...')
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [responseMode, setResponseMode] = useState<ResponseMode>('analysis')
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isSummarizing, setIsSummarizing] = useState(false)
@@ -120,7 +144,8 @@ function App() {
         },
         body: JSON.stringify({
           message: input,
-          history: currentHistory
+          history: currentHistory,
+          response_mode: responseMode
         })
       })
       const data = await res.json()
@@ -138,6 +163,37 @@ function App() {
       setIsLoading(false)
     }
   }
+
+  const handleFeedback = async (messageIndex: number, feedbackType: ChatFeedbackType) => {
+    setMessages(previous => previous.map((message, index) => (
+      index === messageIndex ? { ...message, feedback: feedbackType } : message
+    )));
+
+    try {
+      const response = await fetch(`${API_BASE}/api/chat/feedback`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session ? { 'Authorization': `Bearer ${session.access_token}` } : {})
+        },
+        body: JSON.stringify({
+          feedback_type: feedbackType,
+          response_mode: responseMode
+        })
+      });
+      const data = await response.json();
+      if (!data.success) {
+        throw new Error(data.error || '無法記錄回饋');
+      }
+    } catch (error) {
+      setMessages(previous => previous.map((message, index) => (
+        index === messageIndex && message.feedback === feedbackType
+          ? { ...message, feedback: undefined }
+          : message
+      )));
+      alert('回饋尚未儲存：請先執行資料庫 migration，或確認網路連線。');
+    }
+  };
 
   const handleSummarize = async () => {
     if (messages.length === 0) return;
@@ -453,6 +509,29 @@ function App() {
                           </ol>
                         </details>
                       )}
+                      {msg.role === 'ai' && (
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]" style={{ color: 'var(--color-m-muted)' }}>
+                          {msg.feedback ? (
+                            <span className="px-2 py-1 rounded-md" style={{ backgroundColor: 'var(--color-m-panel-alt)', color: 'var(--color-m-accent2)' }}>
+                              已記錄：{CHAT_FEEDBACK_OPTIONS.find(option => option.value === msg.feedback)?.label}
+                            </span>
+                          ) : (
+                            <>
+                              <span className="mr-1">這則回覆：</span>
+                              {CHAT_FEEDBACK_OPTIONS.map(option => (
+                                <button
+                                  key={option.value}
+                                  onClick={() => handleFeedback(i, option.value)}
+                                  className="px-2 py-1 rounded-md transition-colors hover:opacity-80"
+                                  style={{ backgroundColor: 'var(--color-m-panel-alt)', border: '1px solid var(--color-m-border)' }}
+                                >
+                                  {option.label}
+                                </button>
+                              ))}
+                            </>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -471,6 +550,23 @@ function App() {
               </main>
 
               <footer className="p-4 shrink-0" style={{ borderTop: '1px solid var(--color-m-border)', backgroundColor: 'var(--color-m-header)' }}>
+                <div className="flex flex-wrap items-center gap-1.5 mb-2 text-xs" style={{ color: 'var(--color-m-muted)' }}>
+                  <span className="mr-1">這次想要：</span>
+                  {RESPONSE_MODE_OPTIONS.map(option => (
+                    <button
+                      key={option.value}
+                      onClick={() => setResponseMode(option.value)}
+                      disabled={isLoading}
+                      className="px-2.5 py-1 rounded-md transition-all disabled:opacity-50"
+                      style={responseMode === option.value
+                        ? { backgroundColor: 'var(--color-m-accent1)', color: '#fff' }
+                        : { backgroundColor: 'var(--color-m-panel)', border: '1px solid var(--color-m-border)', color: 'var(--color-m-muted)' }
+                      }
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
                 <div className="flex gap-3 w-full">
                   <textarea
                     rows={5}
