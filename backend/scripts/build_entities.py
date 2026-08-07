@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import datetime
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -111,11 +112,13 @@ def build_entities():
                     break
                 
                 # 5. 寫入資料庫 (先檢查是否已存在，存在則更新，不存在則新增)
+                now_iso = datetime.datetime.now(datetime.UTC).isoformat()
                 existing = supabase.table("entities").select("id").eq("name", entity_name).eq("user_id", user_id).execute()
                 if existing.data and len(existing.data) > 0:
                     supabase.table("entities").update({
                         "description": profile["description"],
-                        "relationship": profile["relationship"]
+                        "relationship": profile["relationship"],
+                        "updated_at": now_iso
                     }).eq("id", existing.data[0]["id"]).execute()
                     print(f"   ✅ 已更新現有檔案。")
                 else:
@@ -123,7 +126,8 @@ def build_entities():
                         "user_id": user_id,
                         "name": entity_name,
                         "description": profile["description"],
-                        "relationship": profile["relationship"]
+                        "relationship": profile["relationship"],
+                        "updated_at": now_iso
                     }).execute()
                     print(f"   ✨ 已建立全新檔案。")
                 

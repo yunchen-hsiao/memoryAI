@@ -13,6 +13,7 @@ entity_profile_service.py — 匯入日記後，針對本次提到的人物做�
 
 import os
 import json
+import datetime
 from google import genai
 from google.genai import types
 from supabase import create_client, Client
@@ -108,18 +109,21 @@ def update_entity_profiles(user_id: str, names: list[str]) -> None:
                 supabase.table("entities").delete().eq("name", entity_name).eq("user_id", user_id).execute()
                 continue
 
+            now_iso = datetime.datetime.now(datetime.UTC).isoformat()
             existing = supabase.table("entities").select("id").eq("name", entity_name).eq("user_id", user_id).execute()
             if existing.data:
                 supabase.table("entities").update({
                     "description": profile["description"],
-                    "relationship": profile["relationship"]
+                    "relationship": profile["relationship"],
+                    "updated_at": now_iso
                 }).eq("id", existing.data[0]["id"]).execute()
             else:
                 supabase.table("entities").insert({
                     "user_id": user_id,
                     "name": entity_name,
                     "description": profile["description"],
-                    "relationship": profile["relationship"]
+                    "relationship": profile["relationship"],
+                    "updated_at": now_iso
                 }).execute()
         except Exception as e:
             print(f"⚠️ update_entity_profiles: 編譯 {entity_name} 失敗，略過此人物: {e}")

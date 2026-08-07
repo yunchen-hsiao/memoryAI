@@ -33,6 +33,10 @@ except Exception as _e:
 
 from services.entity_resolver import resolve_mentioned_entities
 from services.entity_profile_service import update_entity_profiles
+from services.person_analytics_service import (
+    compute_trend_direction, trend_label, build_monthly_series,
+    detect_key_moments, summarize_person_state,
+)
 
 # Configure Supabase
 supabase_url = os.environ.get("SUPABASE_URL")
@@ -1440,6 +1444,77 @@ def get_relationship_heatmap(current_user = Depends(get_current_user)):
         traceback.print_exc()
         return {"success": False, "error": str(e)}
 
+@app.get("/api/dashboard/person_overview")
+def get_person_overview(current_user = Depends(get_current_user)):
+    """
+    人物總覽：一次回傳「象限圖」與「總覽表」共用的資料。
+
+    與 relationship_heatmap 一樣，直接用 Supabase 的 keywords/summary 比對人物，
+    不依賴 Neo4j（Neo4j 目前不可用時，這頁分析仍可正常運作）。
+
+    每位人物回傳：
+      - total_count: 總互動次數（象限圖 X 軸）
+      - avg_score: 平均情緒分數（象限圖 Y 軸）
+      - first_date / last_date: 互動起訖日期
+      - trend_direction / trend_label: 情緒趨勢方向（供總覽表的 ↑/↓/→ 欄位）
+    """
+    try:
+        entities_res = supabase.table("entities").select("name") \
+            .eq("user_id", current_user.id).execute()
+        person_names = [e["name"] for e in (entities_res.data or []) if e.get("name")]
+        if not person_names:
+            return {
+                "success": True, "persons": [],
+                "message": "尚未編譯核心人物檔案，請先執行「編譯核心人物檔案」。"
+            }
+
+        mem_res = supabase.table("memories").select("diary_date, emotion_score, keywords, summary") \
+            .eq("user_id", current_user.id).execute()
+        memories = mem_res.data or []
+        if not memories:
+            return {"success": True, "persons": []}
+
+        for m in memories:
+            m["keywords"] = [decrypt_text(k) for k in (m.get("keywords") or [])]
+            m["summary"] = decrypt_text(m.get("summary", ""))
+
+        persons = []
+        for name in person_names:
+            # 與 relationship_heatmap / dashboard stats 一致的比對方式：keywords 或 summary 命中
+            related = [
+                m for m in memories
+                if name in (m.get("keywords") or []) or name in (m.get("summary") or "")
+            ]
+            if not related:
+                continue
+
+            # 依日期由舊到新排序，才能正確判斷「趨勢方向」（前半段 vs 後半段）
+            related.sort(key=lambda m: m.get("diary_date") or "")
+            chronological_scores = [m.get("emotion_score") for m in related]
+            scored = [s for s in chronological_scores if s is not None]
+
+            direction = compute_trend_direction(chronological_scores)
+            dates = [m["diary_date"] for m in related if m.get("diary_date")]
+
+            persons.append({
+                "name": name,
+                "total_count": len(related),
+                "avg_score": round(sum(scored) / len(scored), 1) if scored else None,
+                "first_date": min(dates) if dates else None,
+                "last_date": max(dates) if dates else None,
+                "trend_direction": direction,
+                "trend_label": trend_label(direction),
+            })
+
+        # 互動次數多的人物排在前面，與其他人物分析頁的排序邏輯一致
+        persons.sort(key=lambda p: p["total_count"], reverse=True)
+
+        return {"success": True, "persons": persons}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
+
 @app.get("/api/graph/persons")
 def get_persons_graph(current_user = Depends(get_current_user)):
     """
@@ -1480,39 +1555,108 @@ def get_persons_graph(current_user = Depends(get_current_user)):
         traceback.print_exc()
         return {"error": str(e)}
 
+def _get_person_analytics_bundle(user_id: str, person_name: str) -> dict:
+    """
+    共用邏輯：抓取某人物的完整事件時間軸並算出衍生分析。
+    供 /api/graph/person/{name} 與 /api/graph/compare 共用，避免重複實作
+    Neo4j 事件查詢、Supabase 解密、月度聚合／關鍵時刻／現況摘要的組裝。
+
+    回傳的 events 已依時間先後排序（舊→新）。
+    """
+    # Neo4j 只回傳結構化資訊（memory_id, date, emotion_score, importance_weight），
+    # 不含事件內容明文，需回 Supabase 依 memory_id 查詢並解密取得實際內容。
+    connections = get_person_connections(user_id, person_name)
+    memory_ids = [c["memory_id"] for c in connections if c.get("memory_id")]
+
+    events = []
+    if memory_ids:
+        res = supabase.table("memories").select("id, diary_date, diary_time, topic, summary, emotion_score, importance_weight") \
+            .eq("user_id", user_id) \
+            .in_("id", memory_ids) \
+            .execute()
+        memories_by_id = {str(m["id"]): m for m in (res.data or [])}
+        for c in connections:
+            m = memories_by_id.get(str(c.get("memory_id")))
+            if not m:
+                continue
+            events.append({
+                "date": m.get("diary_date"),
+                "topic": decrypt_text(m.get("topic", "")),
+                "summary": decrypt_text(m.get("summary", "")),
+                "emotion_score": m.get("emotion_score"),
+                "importance_weight": m.get("importance_weight"),
+            })
+
+    # 依時間先後排序（舊→新），供月度聚合／趨勢／關鍵時刻計算使用。
+    # get_person_connections 原本回傳新→舊，這裡明確反轉，避免順序假設出錯。
+    events.sort(key=lambda e: e.get("date") or "")
+
+    entity_res = supabase.table("entities").select("updated_at") \
+        .eq("user_id", user_id).eq("name", person_name).limit(1).execute()
+    profile_updated_at = (entity_res.data or [{}])[0].get("updated_at") if entity_res.data else None
+
+    co_mentions = get_co_mentioned_keywords(user_id, person_name)
+    scores = [e["emotion_score"] for e in events if e.get("emotion_score") is not None]
+    importances = [e["importance_weight"] for e in events if e.get("importance_weight") is not None]
+
+    return {
+        "events": events,
+        "co_mentioned": co_mentions,
+        "monthly_series": build_monthly_series(events),
+        "key_moments": detect_key_moments(events),
+        "status": summarize_person_state(events, profile_updated_at),
+        "event_count": len(events),
+        "avg_score": round(sum(scores) / len(scores), 1) if scores else None,
+        "avg_importance": round(sum(importances) / len(importances), 1) if importances else None,
+    }
+
+
 @app.get("/api/graph/person/{person_name}")
 def get_person_graph(person_name: str, current_user = Depends(get_current_user)):
-    """Query all events related to a specific person."""
+    """
+    Query all events related to a specific person, plus derived analytics for the
+    strengthened person detail panel:
+      - monthly_series: 生命週期線圖用的月度聚合（事件數 + 平均情緒）
+      - key_moments: 情緒轉折點（與前一筆事件的分數差最大的幾個事件）
+      - status: 現況簡報卡（最新事件、趨勢方向、人物側寫最後更新時間）
+    """
     if not _neo4j_available:
         return {"error": "Neo4j 圖資料庫目前不可用"}
     try:
-        # Neo4j 只回傳結構化資訊（memory_id, date, emotion_score, importance_weight），
-        # 不含事件內容明文，需回 Supabase 依 memory_id 查詢並解密取得實際內容。
-        connections = get_person_connections(str(current_user.id), person_name)
-        memory_ids = [c["memory_id"] for c in connections if c.get("memory_id")]
-
-        events = []
-        if memory_ids:
-            res = supabase.table("memories").select("id, diary_date, diary_time, topic, summary, emotion_score, importance_weight") \
-                .eq("user_id", current_user.id) \
-                .in_("id", memory_ids) \
-                .execute()
-            memories_by_id = {str(m["id"]): m for m in (res.data or [])}
-            for c in connections:
-                m = memories_by_id.get(str(c.get("memory_id")))
-                if not m:
-                    continue
-                events.append({
-                    "date": m.get("diary_date"),
-                    "topic": decrypt_text(m.get("topic", "")),
-                    "summary": decrypt_text(m.get("summary", "")),
-                    "emotion_score": m.get("emotion_score"),
-                    "importance_weight": m.get("importance_weight"),
-                })
-
-        co_mentions = get_co_mentioned_keywords(str(current_user.id), person_name)
-        return {"success": True, "events": events, "co_mentioned": co_mentions}
+        bundle = _get_person_analytics_bundle(str(current_user.id), person_name)
+        return {"success": True, **bundle}
     except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e)}
+
+
+@app.get("/api/graph/compare")
+def compare_persons(person_a: str, person_b: str, current_user = Depends(get_current_user)):
+    """
+    人物對比視圖：一次回傳兩位人物的分析資料（互動頻率、平均情緒、平均重要度、
+    月度生命週期序列、關鍵時刻），供前端並排比較。
+
+    直接重用 _get_person_analytics_bundle()，與單一人物詳情面板保證資料格式一致。
+    """
+    if not _neo4j_available:
+        return {"error": "Neo4j 圖資料庫目前不可用"}
+    if not person_a or not person_b:
+        return {"success": False, "error": "請提供兩位人物的名稱（person_a、person_b）。"}
+    try:
+        user_id = str(current_user.id)
+        bundle_a = _get_person_analytics_bundle(user_id, person_a)
+        bundle_b = _get_person_analytics_bundle(user_id, person_b)
+        return {
+            "success": True,
+            "persons": [
+                {"name": person_a, **bundle_a},
+                {"name": person_b, **bundle_b},
+            ],
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return {"error": str(e)}
 
 # --- 背景腳本併發保護 ---

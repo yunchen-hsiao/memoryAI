@@ -39,7 +39,8 @@ create table entities (
   name text not null,
   description text,
   relationship text,
-  created_at timestamp with time zone default timezone('utc'::text, now())
+  created_at timestamp with time zone default timezone('utc'::text, now()),
+  updated_at timestamp with time zone default timezone('utc'::text, now()) -- 側寫最後更新時間，供人物簡報卡顯示新鮮度
 );
 
 -- Create a function to search memories based on vector similarity and time decay
