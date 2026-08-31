@@ -15,8 +15,7 @@ venv/
 .vscode/
 .idea/
 
-# 執行時期產生的檔案，不應該在建置時就打包進 image
-monthly_summaries_cache.json
+# 執行時期產生的檔案不應該在建置時打包進 image
 out.txt
 scripts/embedding_backup_*.json
 

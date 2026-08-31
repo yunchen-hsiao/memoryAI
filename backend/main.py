@@ -5,22 +5,26 @@ import hashlib
 import json
 import logging
 import re
+import time
 import uuid
 from datetime import date as Date, time as Time
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pytz
-from fastapi import FastAPI, Depends, HTTPException, Query, status, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, Query, Request, status, BackgroundTasks
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 import os
 import datetime
 from dotenv import load_dotenv
+from observability import configure_logging, new_request_id, request_id_context
 
 # 必須在任何第三方 client 初始化前載入 .env，否則本機設定可能尚未進入 os.environ。
 load_dotenv()
+configure_logging()
+logger = logging.getLogger("memoryai")
 
 _APP_ENV = os.environ.get("APP_ENV", "development").strip().lower()
 _REQUIRED_ENV_VARS = (
@@ -68,12 +72,16 @@ try:
                           get_co_mentioned_keywords, get_person_relationship_graph)
     _neo4j_available = True
 except Exception as _e:
-    print(f"⚠️ Neo4j 模組載入失敗，圖資料庫功能將停用：{_e}")
+    logger.warning("neo4j_module_unavailable", extra={"error_type": type(_e).__name__})
     _neo4j_available = False
 
 from services.graph_outbox import enqueue_graph_sync_job
+from services.background_jobs import (
+    JobConflict,
+    JobStoreUnavailable,
+    enqueue_background_job,
+)
 from services.entity_resolver import resolve_mentioned_entities
-from services.entity_profile_service import update_entity_profiles
 from services.person_analytics_service import (
     compute_trend_direction, trend_label, build_monthly_series,
     detect_key_moments, summarize_person_state,
@@ -167,13 +175,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def request_observability_middleware(request: Request, call_next):
+    request_id = new_request_id(request.headers.get("X-Request-ID"))
+    context_token = request_id_context.set(request_id)
+    started_at = time.perf_counter()
+    response = None
+    try:
+        response = await call_next(request)
+        return response
+    except Exception:
+        logger.exception(
+            "http_request_failed",
+            extra={"method": request.method, "path": request.url.path},
+        )
+        raise
+    finally:
+        logger.info(
+            "http_request",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code if response else 500,
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+            },
+        )
+        if response is not None:
+            response.headers["X-Request-ID"] = request_id
+        request_id_context.reset(context_token)
+
+
 CHAT_RESPONSE_MODES = {"companion", "analysis", "strategy", "memory"}
 CHAT_FEEDBACK_TYPES = {"liked", "too_neutral", "too_speculative", "wrong_memory"}
 
 
 def _raise_internal_error(message: str, error: Exception):
     """Log internal details while returning a safe public API error."""
-    logging.exception("%s: %s", message, error)
+    logger.exception("internal_api_error", extra={"error_type": type(error).__name__})
     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=message) from error
 
 
@@ -262,9 +301,37 @@ EMOTION_SCORE_GUIDE = """0到100的整數，請根據「使用者當下主觀感
         機械式地打 50 分左右。反之，若使用者明確表達失望、冷淡或不耐，也不要因為
         語氣平和就打高分。"""
 
+@app.get("/health/live")
+def liveness_check():
+    """Cheap process check for container liveness probes."""
+    return {"status": "ok", "service": "memoryai-backend"}
+
+
+@app.get("/health/ready")
+def readiness_check():
+    """Dependency check for traffic readiness; never calls AI providers."""
+    checks = {"supabase": "ok", "graph_outbox": "ok", "background_jobs": "ok"}
+    try:
+        # Service-role access is intentionally used only by the backend.
+        supabase.table("profiles").select("id").limit(1).execute()
+        supabase.table("graph_sync_outbox").select("id").limit(1).execute()
+        supabase.table("background_jobs").select("id").limit(1).execute()
+    except Exception as error:
+        logger.warning("readiness_check_failed", extra={"path": "/health/ready"})
+        checks["supabase"] = "unavailable"
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "not_ready", "checks": checks},
+        ) from error
+
+    checks["neo4j"] = "available" if _neo4j_available else "degraded"
+    return {"status": "ready", "checks": checks}
+
+
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "message": "MemoryAI Backend is running!"}
+    # Backward-compatible alias; new deployments should probe /health/live or /health/ready.
+    return liveness_check()
 
 security = HTTPBearer()
 
@@ -279,11 +346,31 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     except HTTPException:
         raise
     except Exception as error:
-        logging.exception("Authentication validation failed: %s", error)
+        logger.exception("authentication_validation_failed", extra={"error_type": type(error).__name__})
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication token",
         ) from error
+
+@app.get("/api/jobs/{job_id}")
+def get_background_job(job_id: str, current_user=Depends(get_current_user)):
+    try:
+        uuid.UUID(job_id)
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="job_id 格式無效") from error
+    try:
+        result = supabase.table("background_jobs").select(
+            "id, job_type, status, progress, progress_message, attempts, "
+            "last_error, created_at, updated_at, completed_at"
+        ).eq("id", job_id).eq("user_id", str(current_user.id)).limit(1).execute()
+        if not result.data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+        return {"success": True, "job": result.data[0]}
+    except HTTPException:
+        raise
+    except Exception as error:
+        _raise_internal_error("無法讀取背景任務狀態", error)
+
 
 @app.get("/api/dashboard/stats")
 def get_dashboard_stats(current_user = Depends(get_current_user)):
@@ -1328,29 +1415,28 @@ def monthly_summary(year: int, month: int, force_regenerate: bool = False, curre
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="year/month is out of range",
         )
-    import os, json
-    CACHE_FILE = "monthly_summaries_cache.json"
-    
-    cache_key = f"{year:04d}-{month:02d}"
-    user_cache = {}
-    
-    # 讀取本地快取
-    if os.path.exists(CACHE_FILE):
-        try:
-            with open(CACHE_FILE, "r", encoding="utf-8") as f:
-                user_cache = json.load(f)
-        except Exception:
-            user_cache = {}
-            
     user_id = str(current_user.id)
-    if user_id not in user_cache:
-        user_cache[user_id] = {}
-        
-    # 如果不是強制重新生成，且快取中有資料，直接回傳
-    if not force_regenerate and cache_key in user_cache[user_id]:
-        encrypted_summary = user_cache[user_id][cache_key]
-        summary = decrypt_text(encrypted_summary)
-        return {"success": True, "summary": summary, "cached": True}
+    if not force_regenerate:
+        try:
+            cached_res = supabase.table("monthly_summary_cache").select(
+                "encrypted_summary, memory_count"
+            ).eq("user_id", user_id).eq("summary_year", year).eq(
+                "summary_month", month
+            ).limit(1).execute()
+            cached = cached_res.data[0] if cached_res.data else None
+        except Exception as error:
+            logger.warning("monthly_summary_cache_read_failed")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="月度摘要快取服務目前不可用，請先完成 Phase 4 migration。",
+            ) from error
+        if cached:
+            return {
+                "success": True,
+                "summary": decrypt_text(cached["encrypted_summary"]),
+                "memory_count": cached.get("memory_count", 0),
+                "cached": True,
+            }
 
     try:
         import calendar
@@ -1395,11 +1481,20 @@ def monthly_summary(year: int, month: int, force_regenerate: bool = False, curre
         )
         summary_text = response.message.content[0].text.strip()
         
-        # 存入快取（用 user_email 加密後儲存）
-        user_cache[user_id][cache_key] = encrypt_text(summary_text, current_user.email)
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(user_cache, f, ensure_ascii=False, indent=2)
-            
+        # 儲存到 Supabase durable cache（內容仍以使用者 email 加密）。
+        try:
+            supabase.table("monthly_summary_cache").upsert({
+                "user_id": user_id,
+                "summary_year": year,
+                "summary_month": month,
+                "encrypted_summary": encrypt_text(summary_text, current_user.email),
+                "memory_count": len(res.data),
+                "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            }).execute()
+        except Exception:
+            # 摘要已成功產生；cache 寫入失敗不應丟失本次結果，但要留下結構化 log。
+            logger.exception("monthly_summary_cache_write_failed")
+
         return {"success": True, "summary": summary_text, "memory_count": len(res.data), "cached": False}
     except Exception as error:
         _raise_internal_error("無法產生月度摘要", error)
@@ -1659,22 +1754,26 @@ def import_single_day(request: ImportSingleRequest, background_tasks: Background
             mentioned_names.update(
                 k for k in event.get("keywords", []) if k not in ["蕭筠蓁", "我", "自己"]
             )
+        entity_profile_job_id = None
         if mentioned_names:
-            started = _start_background_function_job(
-                str(current_user.id),
-                "entity_profile",
-                update_entity_profiles,
-                str(current_user.id),
-                list(mentioned_names)
-            )
-            if not started:
-                print(f"⏭️ 使用者 {current_user.id} 的人物檔案更新任務已在執行中，本次跳過。")
+            try:
+                entity_profile_job_id = enqueue_background_job(
+                    supabase,
+                    str(current_user.id),
+                    "entity_profile",
+                    {"mentioned_names": sorted(mentioned_names)},
+                )
+            except JobConflict:
+                logger.info("entity_profile_job_already_active")
+            except JobStoreUnavailable:
+                logger.exception("entity_profile_job_store_unavailable")
 
         return {
             "success": True,
             "inserted_count": inserted_count,
             "skipped_event_count": skipped_event_count,
             "appended": analysis_content != normalized_content,
+            "entity_profile_job_id": entity_profile_job_id,
         }
     except HTTPException:
         raise
@@ -2026,109 +2125,53 @@ def compare_persons(person_a: str, person_b: str, current_user = Depends(get_cur
     except Exception as error:
         _raise_internal_error("無法比較人物資料", error)
 
-# --- 背景腳本併發保護 ---
-# 避免同一個使用者對同一種背景任務（圖譜同步 / 實體編譯）連續觸發多個行程同時執行，
-# 造成 Neo4j / Supabase / Gemini API 的資源競爭。
-# 注意：此鎖僅存在於單一 Python 行程的記憶體中，若後端以多個 worker 行程部署
-# （例如 uvicorn --workers > 1 或多台伺服器），無法跨行程互相保護，屆時需改用
-# Redis 或資料庫作為共享鎖。
-import subprocess
-import threading
-
-_running_jobs: set[tuple[str, str]] = set()
-_jobs_lock = threading.Lock()
-
-def _start_background_job(user_id: str, job_type: str, cmd: list[str], cwd: str | None = None) -> bool:
-    """嘗試啟動一個背景任務（獨立子行程）。若該使用者的同類任務已在執行中，回傳 False 並不會啟動新行程。"""
-    key = (user_id, job_type)
-    with _jobs_lock:
-        if key in _running_jobs:
-            return False
-        _running_jobs.add(key)
-
-    def _run():
-        try:
-            proc = subprocess.Popen(cmd, cwd=cwd)
-            proc.wait()
-        except Exception as e:
-            print(f"⚠️ 背景任務執行失敗 ({job_type}, user={user_id}): {e}")
-        finally:
-            with _jobs_lock:
-                _running_jobs.discard(key)
-
-    threading.Thread(target=_run, daemon=True).start()
-    return True
-
-
-def _start_background_function_job(user_id: str, job_type: str, func, *args, **kwargs) -> bool:
-    """
-    嘗試啟動一個背景任務（同行程內直接呼叫 Python 函式，而非 subprocess）。
-    沿用與 _start_background_job 相同的 (_jobs_lock, _running_jobs) 併發保護語意，
-    適合輕量、不需要獨立子行程隔離的任務（例如局部更新人物檔案）。
-    若該使用者的同類任務已在執行中，回傳 False 並不會啟動新任務。
-    """
-    key = (user_id, job_type)
-    with _jobs_lock:
-        if key in _running_jobs:
-            return False
-        _running_jobs.add(key)
-
-    def _run():
-        try:
-            func(*args, **kwargs)
-        except Exception as e:
-            print(f"⚠️ 背景任務執行失敗 ({job_type}, user={user_id}): {e}")
-        finally:
-            with _jobs_lock:
-                _running_jobs.discard(key)
-
-    threading.Thread(target=_run, daemon=True).start()
-    return True
-
+# --- 持久化背景任務觸發 ---
+# Web process 只建立 Supabase job，不在 request process 啟動 daemon thread。
 
 @app.post("/api/graph/build")
-def trigger_build_graph(current_user = Depends(get_current_user)):
-    """觸發一次性歷史資料同步到 Neo4j"""
-    import sys
+def trigger_build_graph(current_user=Depends(get_current_user)):
+    """建立一次性歷史資料同步 job，由獨立 worker 執行。"""
     try:
-        started = _start_background_job(
+        job_id = enqueue_background_job(
+            supabase,
             str(current_user.id),
             "graph",
-            [sys.executable, "scripts/build_graph.py", str(current_user.id)],
-            cwd=os.path.dirname(os.path.abspath(__file__))
+            {},
         )
-        if not started:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Neo4j 圖資料庫同步已在進行中，請等待完成後再試一次。",
-            )
-        return {"success": True, "message": "已觸發 Neo4j 圖資料庫同步！系統正在背景建立圖譜中，這可能需要幾分鐘。"}
-    except HTTPException:
-        raise
-    except Exception as error:
-        _raise_internal_error("無法啟動 Neo4j 同步", error)
+        return {"success": True, "job_id": job_id, "message": "已建立 Neo4j 圖資料庫同步任務。"}
+    except JobConflict as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Neo4j 圖資料庫同步已在進行中，請等待完成後再試一次。",
+        ) from error
+    except JobStoreUnavailable as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="背景任務服務目前不可用，請先完成 Phase 4 migration。",
+        ) from error
 
 
 @app.post("/api/entities/build")
-def trigger_build_entities(current_user = Depends(get_current_user)):
-    import sys
+def trigger_build_entities(current_user=Depends(get_current_user)):
+    """建立人物檔案編譯 job，由獨立 worker 執行。"""
     try:
-        # 使用 sys.executable 確保背景執行時是使用當前 venv 的 python
-        started = _start_background_job(
+        job_id = enqueue_background_job(
+            supabase,
             str(current_user.id),
             "entities",
-            [sys.executable, "scripts/build_entities.py", str(current_user.id)]
+            {},
         )
-        if not started:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="核心人物檔案編譯已在進行中，請等待完成後再試一次。",
-            )
-        return {"success": True, "message": "已成功觸發核心人物檔案編譯！系統正在背景努力更新大腦中。"}
-    except HTTPException:
-        raise
-    except Exception as error:
-        _raise_internal_error("無法啟動人物檔案編譯", error)
+        return {"success": True, "job_id": job_id, "message": "已建立核心人物檔案編譯任務。"}
+    except JobConflict as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="核心人物檔案編譯已在進行中，請等待完成後再試一次。",
+        ) from error
+    except JobStoreUnavailable as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="背景任務服務目前不可用，請先完成 Phase 4 migration。",
+        ) from error
 
 if __name__ == "__main__":
     import uvicorn

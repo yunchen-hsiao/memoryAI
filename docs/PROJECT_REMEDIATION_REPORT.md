@@ -300,3 +300,72 @@ MemoryAI 已完成 React/Vite 前端、FastAPI 後端、Supabase/PostgreSQL/pgve
 - `git diff --check`：通過。
 
 本機第三階段程式交付完成；雲端 migration、outbox scheduler、Neo4j constraints 確認與 reconciliation 尚未執行，不能視為雲端部署完成。
+
+## 9. 第四階段執行結果：背景任務、部署與可觀測性
+
+### 已完成的本機程式修改
+
+- 新增 `backend/database/migrations/20260831_phase4_operations.sql`：
+  - `monthly_summary_cache`，以 user/year/month primary key 持久化加密月度摘要。
+  - `background_jobs`，支援 graph、entities、entity_profile job、progress、lease、attempts、retry 與完成狀態。
+  - `claim_background_jobs`、`complete_background_job`、`update_background_job_progress` RPC。
+  - active job unique index，避免同一使用者同類 job 重複執行。
+- 新增 `backend/services/background_jobs.py` 與 `backend/scripts/process_background_jobs.py`：
+  - web process 只建立 durable job，不再啟動 graph/entities/entity-profile daemon thread。
+  - worker 以 database claim/lease 執行 subprocess 或 entity profile function，失敗會重試，五次後標記 failed。
+- `backend/main.py`：
+  - 新增 `/health/live` liveness endpoint。
+  - 新增 `/health/ready` readiness endpoint，檢查 Supabase、Phase 3 graph outbox 與 Phase 4 background jobs table；Neo4j 不可用時回報 degraded，不阻擋核心服務 readiness。
+  - 保留 `/api/health` 作為向後相容的 liveness alias。
+  - 新增 request ID middleware，接受合法 `X-Request-ID` 或自動產生 ID，並在 response header 回傳。
+  - 新增 `/api/jobs/{job_id}`，限制使用者只能查看自己的 background job 狀態。
+  - monthly summary 改用 Supabase durable cache，不再讀寫 `monthly_summaries_cache.json`。
+  - graph/entities build route 改為建立 persistent job，重複 job 回傳 409，job store 不可用回傳 503。
+- 新增 `backend/observability.py`：
+  - 使用 Python standard library JSON formatter。
+  - request log 包含 timestamp、level、method、path、status、duration 與 request ID。
+  - 不寫入 token、secret、prompt 或日記內容。
+- `backend/Dockerfile`：
+  - 使用 `python:3.11-slim`。
+  - 建立非 root `app` user。
+  - 加入 `PYTHONUNBUFFERED`、`HEALTHCHECK` 與 `/health/live` probe。
+  - 保留 web 與 worker 分離，container 不在 web CMD 內執行 queue loop。
+- README 已補上 migration 順序、worker command、health probe、staging/production secret 與 readiness 說明。
+
+### 第四階段明確限制
+
+- 本階段使用 Supabase/PostgreSQL durable jobs，不新增 Redis；若未來需要更高吞吐或即時 queue，再另行評估 Redis。
+- 目前沒有替平台建立正式 Render/Fly/Kubernetes manifest；部署平台的 scheduler、probe、resource limit、autoscaling 與 log retention 必須由維運人員設定。
+- readiness 會檢查 Supabase 與必要 job/outbox table 是否存在，但不執行 AI 呼叫，也不把 Neo4j 連線當成核心 API 的硬性依賴。
+- 外部錯誤監控 SDK/DSN 尚未加入；本階段先完成 request ID 與 structured logs，平台可直接收集 JSON stdout。Sentry 等服務留待部署決策後加入。
+
+### 第四階段雲端操作清單
+
+1. 依序執行修正版 Phase 3 migration 與：
+   `backend/database/migrations/20260831_phase4_operations.sql`
+2. 確認 Supabase 建立 `monthly_summary_cache`、`background_jobs` 與三個 background job RPC。
+3. 部署 backend，將平台 liveness probe 設為：
+   `GET /health/live`
+4. 將 readiness probe 設為：
+   `GET /health/ready`
+   若回傳 `503`，先檢查 Supabase connectivity 與 Phase 3/4 migration。
+5. 建立獨立 scheduler/worker，定期執行：
+   - `python scripts/process_graph_outbox.py 25`
+   - `python scripts/process_background_jobs.py 5`
+6. 為 staging 與 production 分別設定獨立 Supabase/Neo4j/API keys、resource limits、log retention 與 scheduler。
+7. 確認平台只把 backend/worker secrets 注入 server，不把 service-role key 放進 frontend。
+8. 以 staging 執行 graph build、entity build、日記匯入與 monthly summary，確認 `/api/jobs/{job_id}` 狀態會從 `pending` 變成 `processing` 再變成 `completed` 或可重試的 `failed`。
+
+本階段未替使用者執行 Supabase migration、雲端 worker、probe、autoscaling、log retention 或外部監控設定；這些是第四階段的必要雲端操作。
+
+### 第四階段本機驗證結果
+
+- Backend Python AST syntax check：通過，18 個專案 Python 檔案、0 syntax errors。
+- Backend、observability、background job service、worker imports：通過。
+- Health/request-ID smoke：通過；`/health/live` 回傳 `ok`，合法 request ID 會保留，非法含空白 ID 會被替換為安全 UUID。
+- Phase 4 migration/Docker 靜態檢查：通過；確認 migration 包含 `monthly_summary_cache`、`background_jobs`、三個 job RPC，Docker 包含 Python base image、非 root `app` user 與 `HEALTHCHECK`，`.dockerignore` 不再引用本機 monthly cache。
+- Frontend `npm run build`：通過；仍有約 1,190 kB bundle size warning。
+- Frontend `npm run lint`：24 errors、2 warnings，與第三階段既有基線相同；本階段沒有新增 frontend lint error。
+- `git diff --check`：通過。
+
+本機第四階段程式交付完成；Supabase migrations、worker scheduler、health/readiness probe、resource limits、log retention、staging/prod secrets 與外部 error monitoring 尚未在雲端執行或驗證。

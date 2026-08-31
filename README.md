@@ -161,7 +161,7 @@ npm run dev
 | `import_history_v2.py` | 從日記文字檔批次匯入歷史記憶（含 AI 事件切割、前情提要串接、429 自動退避） |
 | `build_graph.py` | 把 Supabase 既有記憶補建／重建到 Neo4j 圖譜 |
 | `build_entities.py` | 掃描記憶，重新萃取核心人物實體檔案 |
-| `migration` SQL | 既有 Supabase 部署需依序執行 `backend/database/migrations/` 下的三個 migration：`20260804_add_memory_imports.sql`、`20260804_add_entities_updated_at.sql`、`20260804_add_chat_response_feedback.sql` |
+| `migration` SQL | 既有 Supabase 部署需依序執行 `backend/database/migrations/` 下的 migration：`20260804_add_memory_imports.sql`、`20260804_add_entities_updated_at.sql`、`20260804_add_chat_response_feedback.sql`、`20260831_phase3_data_consistency.sql`、`20260831_phase4_operations.sql`。Phase 3 的 migration 不可使用舊版 HNSW SQL；目前 `vector(3072)` 只建立 user-scoped filter index。 |
 | `migrate_graph_strip_content.py` | 一次性遷移：清掉圖資料庫早期版本殘留的內容明文欄位 |
 | `reembed_memories.py` | 換 embedding 模型／維度後，重算全部記憶向量 |
 | `model_search.py` | 列出目前 API Key 可用的模型清單 |
@@ -213,3 +213,42 @@ python scripts/process_graph_outbox.py 25
 ```
 
 既有資料切換新流程後，需由維運人員依使用者執行一次 graph reconciliation。Worker 只需要既有 backend 的 Supabase service-role、Neo4j 與加密設定，不需要把任何 service-role key 放進 frontend，也不強制新增 Redis。
+
+## 第四階段：背景任務、部署與可觀測性
+
+第四階段新增：
+
+- `GET /health/live`：只檢查 API process 是否存活，供容器 liveness probe 使用。
+- `GET /health/ready`：檢查 Supabase、Phase 3 graph outbox 與 Phase 4 background jobs table；Neo4j 目前以 degraded 狀態回報，不阻擋核心 API readiness。
+- API middleware 會產生或傳遞 `X-Request-ID`，並在 response header 回傳相同 ID。
+- Backend 使用標準 library 輸出 JSON structured logs，包含 timestamp、level、method、path、status、duration 與 request ID；不記錄 token、secret、prompt 或日記內容。
+- `background_jobs` 與 `monthly_summary_cache` 改由 Supabase 持久化，不再依賴 web process 的 daemon thread 或本機 JSON cache。
+- `backend/scripts/process_background_jobs.py` 負責執行 graph、entities、entity profile jobs；`backend/scripts/process_graph_outbox.py` 仍負責 Phase 3 Neo4j sync jobs。
+- `GET /api/jobs/{job_id}` 提供使用者查詢自己背景任務的狀態與進度。
+- Backend Dockerfile 改為固定 Python base image、非 root `app` user、`HEALTHCHECK` 與 unbuffered logging。
+
+### 第四階段 migration 與 worker
+
+Phase 4 migration：
+
+```text
+backend/database/migrations/20260831_phase4_operations.sql
+```
+
+必須先執行 Phase 3 修正版 migration，再執行 Phase 4 migration。部署後至少設定兩個獨立 scheduler/worker command：
+
+```text
+python scripts/process_graph_outbox.py 25
+python scripts/process_background_jobs.py 5
+```
+
+兩個 worker 都不可在 web request process 內以 daemon thread 執行。Production/staging 必須使用各自獨立的 Supabase、Neo4j、Gemini、Cohere、`ENCRYPTION_KEY` 與 service-role secrets；service-role key 只放 backend/worker，不可放進 frontend。
+
+### Health probe
+
+```text
+Liveness:  GET /health/live
+Readiness: GET /health/ready
+```
+
+若 readiness 回傳 `503`，通常表示 Phase 3/Phase 4 migration 尚未執行，或 Supabase 無法連線；此時平台不應將該 instance 導入流量。
