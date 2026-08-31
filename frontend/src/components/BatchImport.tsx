@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { UploadCloud, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
+import { apiFetch } from '../lib/api';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -57,6 +58,7 @@ export default function BatchImport({ token }: BatchImportProps) {
 
     let successCount = 0;
     let skipCount = 0;
+    let failedCount = 0;
 
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i];
@@ -64,7 +66,10 @@ export default function BatchImport({ token }: BatchImportProps) {
       setMessage(`正在處理 ${entry.date}...`);
 
       try {
-        const res = await fetch(`${API_BASE}/api/import/single`, {
+        const data = await apiFetch<{
+          skipped?: boolean;
+          inserted_count?: number;
+        }>(`${API_BASE}/api/import/single`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -76,22 +81,24 @@ export default function BatchImport({ token }: BatchImportProps) {
           })
         });
 
-        const data = await res.json();
-        if (data.success) {
-          if (data.skipped) {
-            skipCount++;
-          } else {
-            successCount += data.inserted_count || 1;
-          }
+        if (data.skipped) {
+          skipCount++;
         } else {
-          console.error(`Error on ${entry.date}:`, data.error);
+          successCount += data.inserted_count || 1;
         }
       } catch (err) {
+        failedCount++;
         console.error(`Request failed for ${entry.date}:`, err);
       }
     }
 
     setIsProcessing(false);
+    if (failedCount > 0) {
+      setStatus('error');
+      setMessage(`匯入部分完成：成功 ${successCount} 筆、略過 ${skipCount} 筆、失敗 ${failedCount} 天。失敗日期請稍後重新匯入。`);
+      return;
+    }
+
     setStatus('success');
     setMessage(`匯入完成！成功處理了 ${successCount} 筆新記憶 (略過 ${skipCount} 筆重複資料)。`);
     setText('');

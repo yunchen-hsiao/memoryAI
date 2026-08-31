@@ -110,12 +110,13 @@ RAG 系統的最強殺手鐧。當你跟 AI 聊完天、抱怨完之後，只需
 請在 `backend` 資料夾下建立 `.env` 檔案，填入以下金鑰：
 
 ```env
+# backend-only secrets
+APP_ENV=development
 GEMINI_API_KEY=your_gemini_api_key
 COHERE_API_KEY=your_cohere_api_key
 SUPABASE_URL=your_supabase_url
-SUPABASE_KEY=your_supabase_anon_key
-ENCRYPTION_KEY=your_fernet_encryption_key   # 負責將使用者日記加密成亂碼的專屬金鑰
-ADMIN_EMAIL=your_admin_email@example.com    # 管理員豁免信箱（此信箱存入的資料將不會被加密）
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
+ENCRYPTION_KEY=your_fernet_encryption_key   # 必須保留；更換會使既有加密資料無法解密
 
 # Neo4j AuraDB（圖資料庫功能；未設定時圖相關 API 會自動停用，不影響其他功能）
 NEO4J_URI=neo4j+s://xxxxxxxx.databases.neo4j.io
@@ -125,6 +126,10 @@ NEO4J_PASSWORD=your_neo4j_password
 # 部署用（本機開發可省略）
 ALLOWED_ORIGINS=https://your-frontend.vercel.app
 ```
+
+> `SUPABASE_SERVICE_ROLE_KEY` 只能放在 backend 的 secret/environment variables，絕對不可放入前端或任何 `VITE_*` 變數。既有本機環境若仍使用 `SUPABASE_KEY`，目前保留相容讀取；`APP_ENV=staging` 或 `APP_ENV=production` 時則必須改用 `SUPABASE_SERVICE_ROLE_KEY`。前端另使用 `VITE_SUPABASE_URL` 與 `VITE_SUPABASE_ANON_KEY`，anon key 可公開但安全性必須依賴 Supabase RLS。
+>
+> `ENCRYPTION_KEY` 不可任意重新產生。若遺失或更換，既有加密記憶可能無法解密；請將它保存於雲端 secret manager，並建立備份與 key rotation 流程。新寫入資料一律加密，舊有明文資料目前僅保留讀取相容性，後續需另行執行加密 migration。
 
 
 ### 2. 啟動後端 (Backend)
@@ -156,8 +161,7 @@ npm run dev
 | `import_history_v2.py` | 從日記文字檔批次匯入歷史記憶（含 AI 事件切割、前情提要串接、429 自動退避） |
 | `build_graph.py` | 把 Supabase 既有記憶補建／重建到 Neo4j 圖譜 |
 | `build_entities.py` | 掃描記憶，重新萃取核心人物實體檔案 |
-| `migration` SQL | 既有 Supabase 部署需在 SQL Editor 執行 `backend/database/migrations/` 下的三個 migration：`20260804_add_memory_imports.sql`、`20260804_add_entities_updated_at.sql`、`20260804_add_chat_response_feedback.sql` |
-| `migration` SQL | 既有 Supabase 部署需在 SQL Editor 執行 `backend/database/migrations/` 下的三個 migration：`20260804_add_memory_imports.sql`、`20260804_add_entities_updated_at.sql`、`20260804_add_chat_response_feedback.sql` |
+| `migration` SQL | 既有 Supabase 部署需依序執行 `backend/database/migrations/` 下的三個 migration：`20260804_add_memory_imports.sql`、`20260804_add_entities_updated_at.sql`、`20260804_add_chat_response_feedback.sql` |
 | `migrate_graph_strip_content.py` | 一次性遷移：清掉圖資料庫早期版本殘留的內容明文欄位 |
 | `reembed_memories.py` | 換 embedding 模型／維度後，重算全部記憶向量 |
 | `model_search.py` | 列出目前 API Key 可用的模型清單 |
@@ -182,3 +186,30 @@ npm run dev
 - **人物判定仍依賴關鍵字長度啟發式**（2~6 字），少數地名或專案名可能被誤判為人物。
 - **手動記憶 CRUD 與圖譜同步仍非即時**：透過記憶時光機手動新增、編輯或刪除記憶後，人物對比／人物關係圖可能暫時與 Supabase 不一致；新增或編輯後可執行 `python scripts/build_graph.py <user_id>` 補同步，刪除資料則需另外清理或重建對應 Neo4j 圖譜。
 - **月度故事回顧**功能已實作但暫時隱藏，等 API 額度策略確定後再開放。
+
+## API 錯誤與輸入驗證
+
+Backend API 會在 server-side 驗證輸入資料，包括聊天長度與歷史筆數、記憶內容長度、關鍵字數量、情緒分數（0-100）、重要度（1-5）、日期、時間與 IANA 時區。前端不可取代這些驗證。
+
+API 錯誤會使用適當的 HTTP status，例如 400（輸入錯誤）、404（資料不存在）、409（背景任務重複）、502（AI 回應無法解析）、503（Neo4j 暫時不可用）與 500（伺服器錯誤）。前端透過統一 API client 檢查 HTTP status 與錯誤 payload；批次匯入或對話歸檔部分失敗時，不會再誤顯示全數成功，也不會清除尚未完成的內容。
+
+目前第二階段尚未加入 Redis/資料庫 rate limit、每日 AI quota、cursor pagination 或 Neo4j outbox；這些項目列在 `docs/PROJECT_REMEDIATION_REPORT.md` 的後續階段。
+
+## 第三階段：分頁、聚合與 Neo4j 一致性
+
+第三階段新增：
+
+- `GET /api/memories` 使用 bounded cursor pagination，預設每頁 30 筆、上限 100 筆，回傳 `next_cursor` 與 `has_more`。
+- MemoryTimeline 改為分頁載入與「載入更多」，不再初次載入全部記憶。
+- Dashboard 的日期情緒趨勢、紀錄天數與平均分數可使用 PostgreSQL aggregate RPC；加密的 keywords、summary 相關人物分析仍保留有限制的相容路徑。
+- `backend/database/migrations/20260831_phase3_data_consistency.sql` 新增時間軸複合 index、3072 維 embedding 的 user-scoped filter index、dashboard aggregate RPC 與 Neo4j graph sync outbox。Supabase 目前不支援對 `vector(3072)` 建立 HNSW/IVFFlat ANN index，因此 migration 不會建立 HNSW。
+- Memory create/update/delete 與日記匯入會先建立 durable graph outbox job；`backend/scripts/process_graph_outbox.py` 負責 claim、retry 與處理 Neo4j upsert/delete。
+- `backend/scripts/reconcile_graph.py` 可依使用者比對 Supabase memories 與 Neo4j Event，清除 orphan Event 並重建結構化關係。
+
+部署第三階段 backend 前，必須先在 Supabase 執行該 migration。部署後需配置排程或 worker 定期執行：
+
+```text
+python scripts/process_graph_outbox.py 25
+```
+
+既有資料切換新流程後，需由維運人員依使用者執行一次 graph reconciliation。Worker 只需要既有 backend 的 Supabase service-role、Neo4j 與加密設定，不需要把任何 service-role key 放進 frontend，也不強制新增 Redis。

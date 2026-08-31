@@ -9,6 +9,7 @@ import { BrainIcon, DashboardIcon, TimelineIcon, UploadIcon, ShieldIcon, LogoutI
 import AuthScreen from './components/AuthScreen'
 import BatchImport from './components/BatchImport'
 import { supabase } from './supabase'
+import { apiFetch } from './lib/api'
 
 interface SummarizedEvent {
   summary: string;
@@ -30,6 +31,15 @@ interface ChatSource {
   topic: string;
   summary: string;
   excerpt: string;
+}
+
+interface ChatResponse {
+  reply?: string;
+  sources?: ChatSource[];
+}
+
+interface SummarizeResponse {
+  events?: SummarizedEvent[];
 }
 
 type ResponseMode = 'companion' | 'analysis' | 'strategy' | 'memory';
@@ -136,7 +146,7 @@ function App() {
     setIsLoading(true)
 
     try {
-      const res = await fetch(`${API_BASE}/api/chat`, {
+      const data = await apiFetch<ChatResponse>(`${API_BASE}/api/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -148,17 +158,14 @@ function App() {
           response_mode: responseMode
         })
       })
-      const data = await res.json()
-      const sources: ChatSource[] | undefined = Array.isArray(data.sources)
-        ? data.sources
-        : undefined
+      const sources = Array.isArray(data.sources) ? data.sources : undefined
       setMessages(prev => [...prev, {
         role: 'ai',
-        content: data.reply || data.error || '無法取得回應',
+        content: data.reply || '無法取得回應',
         sources
       }])
-    } catch (err) {
-      setMessages(prev => [...prev, { role: 'error', content: '網路錯誤，請稍後再試。' }])
+    } catch {
+      setMessages(prev => [...prev, { role: 'error', content: '無法取得回應，請稍後再試。' }])
     } finally {
       setIsLoading(false)
     }
@@ -170,7 +177,7 @@ function App() {
     )));
 
     try {
-      const response = await fetch(`${API_BASE}/api/chat/feedback`, {
+      await apiFetch<{ success: true }>(`${API_BASE}/api/chat/feedback`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -181,11 +188,7 @@ function App() {
           response_mode: responseMode
         })
       });
-      const data = await response.json();
-      if (!data.success) {
-        throw new Error(data.error || '無法記錄回饋');
-      }
-    } catch (error) {
+    } catch {
       setMessages(previous => previous.map((message, index) => (
         index === messageIndex && message.feedback === feedbackType
           ? { ...message, feedback: undefined }
@@ -200,7 +203,7 @@ function App() {
     setIsSummarizing(true);
 
     try {
-      const res = await fetch(`${API_BASE}/api/chat/summarize`, {
+      const data = await apiFetch<SummarizeResponse>(`${API_BASE}/api/chat/summarize`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -208,14 +211,13 @@ function App() {
         },
         body: JSON.stringify({ history: messages })
       });
-      const data = await res.json();
       if (data.events) {
         setSummarizedEvents(data.events);
       } else {
-        alert('摘要失敗：' + (data.error || '未知錯誤'));
+        alert('摘要失敗：AI 沒有產生可歸檔的事件。');
       }
-    } catch (err) {
-      alert('網路錯誤：' + err);
+    } catch {
+      alert('摘要失敗，請稍後再試。');
     } finally {
       setIsSummarizing(false);
     }
@@ -230,9 +232,12 @@ function App() {
       .map(m => m.content)
       .join('\n\n');
 
-    try {
-      for (const event of summarizedEvents) {
-        await fetch(`${API_BASE}/api/memories`, {
+    const failedEventIndexes: number[] = [];
+    let successCount = 0;
+
+    for (const [index, event] of summarizedEvents.entries()) {
+      try {
+        await apiFetch<{ success: true }>(`${API_BASE}/api/memories`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -246,17 +251,26 @@ function App() {
             emotion_score: event.emotion_score,
             importance_weight: event.importance_weight,
             keywords: event.keywords,
-            content: event.exact_quote || fullChatText,  // 優先使用精確擷取的片段，若無則儲存完整對話原文
+            content: event.exact_quote || fullChatText,
             timezone: event.timezone
           })
         });
+        successCount += 1;
+      } catch {
+        failedEventIndexes.push(index);
       }
-      alert('✅ 對話已成功歸檔至大腦中！');
-      setSummarizedEvents(null);
-      setMessages([]);
-    } catch (err) {
-      alert('歸檔過程發生錯誤：' + err);
     }
+
+    if (failedEventIndexes.length > 0) {
+      const failedEvents = summarizedEvents.filter((_, index) => failedEventIndexes.includes(index));
+      setSummarizedEvents(failedEvents);
+      alert(`部分歸檔完成：成功 ${successCount} 個事件，失敗 ${failedEventIndexes.length} 個事件。失敗事件已保留在預覽中，修正後可再次儲存。`);
+      return;
+    }
+
+    alert('✅ 對話已成功歸檔至大腦中！');
+    setSummarizedEvents(null);
+    setMessages([]);
   };
 
   const handleLogout = async () => {

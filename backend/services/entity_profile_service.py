@@ -29,7 +29,7 @@ def _get_supabase() -> Client:
     if _supabase is None:
         _supabase = create_client(
             os.environ.get("SUPABASE_URL"),
-            os.environ.get("SUPABASE_KEY")
+            os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
         )
     return _supabase
 
@@ -99,7 +99,7 @@ def update_entity_profiles(user_id: str, names: list[str]) -> None:
 
         try:
             response = client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(response_mime_type="application/json")
             )

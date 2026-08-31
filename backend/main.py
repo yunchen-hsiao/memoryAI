@@ -1,36 +1,77 @@
 import json
+import base64
+import binascii
 import hashlib
+import json
+import logging
 import re
+import uuid
+from datetime import date as Date, time as Time
 from typing import Literal
-from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+import pytz
+from fastapi import FastAPI, Depends, HTTPException, Query, status, BackgroundTasks
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 import os
 import datetime
 from dotenv import load_dotenv
+
+# 必須在任何第三方 client 初始化前載入 .env，否則本機設定可能尚未進入 os.environ。
+load_dotenv()
+
+_APP_ENV = os.environ.get("APP_ENV", "development").strip().lower()
+_REQUIRED_ENV_VARS = (
+    "GEMINI_API_KEY",
+    "COHERE_API_KEY",
+    "SUPABASE_URL",
+    "ENCRYPTION_KEY",
+)
+_missing_env_vars = [name for name in _REQUIRED_ENV_VARS if not os.environ.get(name)]
+if _missing_env_vars:
+    raise RuntimeError(
+        "Missing required environment variables: "
+        + ", ".join(_missing_env_vars)
+    )
+
+# 後端需要 service role key；保留 SUPABASE_KEY 僅供既有本機環境暫時相容。
+# staging/production 必須改用明確命名的 SUPABASE_SERVICE_ROLE_KEY。
+supabase_service_role_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+legacy_supabase_key = os.environ.get("SUPABASE_KEY")
+if not supabase_service_role_key and _APP_ENV in {"staging", "production"}:
+    raise RuntimeError(
+        "SUPABASE_SERVICE_ROLE_KEY is required when APP_ENV is staging or production"
+    )
+if not supabase_service_role_key and not legacy_supabase_key:
+    raise RuntimeError(
+        "Missing SUPABASE_SERVICE_ROLE_KEY (or legacy SUPABASE_KEY for local development)"
+    )
+
 # 初始化 Google Gemini 客戶端 (專供 Embedding 使用)
 from google import genai
 from google.genai import types
-client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 # 初始化 Cohere 客戶端 (專供文字生成)
 import cohere
-co = cohere.ClientV2(os.environ.get("COHERE_API_KEY"))
+co = cohere.ClientV2(os.environ["COHERE_API_KEY"])
 from supabase import create_client, Client
 
-load_dotenv()
 from security import encrypt_text, decrypt_text
 
 # 初始化 Neo4j 圖資料庫連線
 try:
-    from graph_db import (sync_event_to_graph, get_full_graph, get_person_connections,
+    from graph_db import (sync_event_to_graph, upsert_event_to_graph,
+                          delete_event_from_graph, get_full_graph, get_person_connections,
                           get_co_mentioned_keywords, get_person_relationship_graph)
     _neo4j_available = True
 except Exception as _e:
     print(f"⚠️ Neo4j 模組載入失敗，圖資料庫功能將停用：{_e}")
     _neo4j_available = False
 
+from services.graph_outbox import enqueue_graph_sync_job
 from services.entity_resolver import resolve_mentioned_entities
 from services.entity_profile_service import update_entity_profiles
 from services.person_analytics_service import (
@@ -39,15 +80,69 @@ from services.person_analytics_service import (
 )
 
 # Configure Supabase
-supabase_url = os.environ.get("SUPABASE_URL")
-supabase_key = os.environ.get("SUPABASE_KEY")
+supabase_url = os.environ["SUPABASE_URL"]
+supabase_key = supabase_service_role_key or legacy_supabase_key
 supabase: Client = create_client(supabase_url, supabase_key)
 
-# Configure Gemini
-gemini_api_key = os.environ.get("GEMINI_API_KEY")
-if not gemini_api_key:
-    print("WARNING: GEMINI_API_KEY environment variable is missing!")
-# client = genai.Client(api_key=gemini_api_key)
+
+def _encode_memory_cursor(memory: dict) -> str:
+    payload = {
+        "date": memory.get("diary_date") or "0001-01-01",
+        "time": memory.get("diary_time"),
+        "id": str(memory.get("id")),
+    }
+    encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(encoded).decode("ascii").rstrip("=")
+
+
+def _decode_memory_cursor(cursor: str | None) -> dict[str, object] | None:
+    if not cursor:
+        return None
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+        cursor_date = Date.fromisoformat(str(payload["date"]))
+        cursor_time = payload.get("time")
+        if cursor_time:
+            cursor_time = Time.fromisoformat(str(cursor_time))
+        else:
+            cursor_time = None
+        cursor_id = uuid.UUID(str(payload["id"]))
+        return {"date": cursor_date.isoformat(), "time": cursor_time.isoformat() if cursor_time else None, "id": str(cursor_id)}
+    except (binascii.Error, KeyError, TypeError, ValueError, json.JSONDecodeError, UnicodeError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cursor 格式無效，請重新載入記憶時間軸。",
+        ) from error
+
+
+def _queue_graph_sync(
+    user_id: str,
+    memory_id: str,
+    operation: str,
+    payload: dict | None,
+    background_tasks: BackgroundTasks | None,
+) -> bool:
+    """Prefer durable outbox; use request-local fallback only before migration."""
+    queued = enqueue_graph_sync_job(supabase, user_id, memory_id, operation, payload)
+    if queued:
+        return True
+    if not _neo4j_available or background_tasks is None:
+        return False
+    if operation == "delete":
+        background_tasks.add_task(delete_event_from_graph, user_id, memory_id)
+    else:
+        graph_payload = payload or {}
+        background_tasks.add_task(
+            upsert_event_to_graph,
+            user_id,
+            memory_id,
+            str(graph_payload.get("date_str") or ""),
+            list(graph_payload.get("keywords") or []),
+            int(graph_payload.get("emotion_score", 50)),
+            int(graph_payload.get("importance_weight", 3)),
+        )
+    return False
 
 app = FastAPI(title="MemoryAI API")
 
@@ -76,10 +171,76 @@ CHAT_RESPONSE_MODES = {"companion", "analysis", "strategy", "memory"}
 CHAT_FEEDBACK_TYPES = {"liked", "too_neutral", "too_speculative", "wrong_memory"}
 
 
+def _raise_internal_error(message: str, error: Exception):
+    """Log internal details while returning a safe public API error."""
+    logging.exception("%s: %s", message, error)
+    raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=message) from error
+
+
+def _normalize_date_value(value: str, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a valid ISO date")
+    raw_parts = value.strip().replace("/", "-").split("-")
+    if len(raw_parts) != 3:
+        raise ValueError(f"{field_name} must use YYYY-MM-DD format")
+    try:
+        parsed = Date(int(raw_parts[0]), int(raw_parts[1]), int(raw_parts[2]))
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{field_name} must be a valid calendar date") from error
+    return parsed.isoformat()
+
+
+def _validate_time_value(value: str | None) -> str | None:
+    if value is None or value == "":
+        return None
+    try:
+        Time.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError("diary_time must use HH:MM or HH:MM:SS format") from error
+    return value
+
+
+def _validate_timezone_value(value: str | None) -> str | None:
+    if value is None or value == "":
+        return None
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError) as error:
+        # Windows 可能沒有 system tzdata；pytz 提供相同 IANA timezone 的 fallback。
+        try:
+            pytz.timezone(value)
+        except pytz.UnknownTimeZoneError as fallback_error:
+            raise ValueError("timezone must be a valid IANA timezone") from fallback_error
+    return value
+
+
+def _validate_keywords_value(value: list[str] | None) -> list[str] | None:
+    if value is None:
+        return None
+    if len(value) > 30:
+        raise ValueError("keywords cannot contain more than 30 items")
+    for keyword in value:
+        if not isinstance(keyword, str) or not keyword.strip():
+            raise ValueError("keywords must contain non-empty strings")
+        if len(keyword.strip()) > 100:
+            raise ValueError("each keyword must be at most 100 characters")
+    return [keyword.strip() for keyword in value]
+
+
 class ChatRequest(BaseModel):
-    message: str = ""
-    history: list[dict] = []
+    message: str = Field(default="", max_length=12_000)
+    history: list[dict] = Field(default_factory=list, max_length=30)
     response_mode: Literal["companion", "analysis", "strategy", "memory"] = "analysis"
+
+    @field_validator("history")
+    @classmethod
+    def validate_history(cls, value: list[dict]) -> list[dict]:
+        for item in value:
+            if not isinstance(item, dict) or not isinstance(item.get("content"), str):
+                raise ValueError("history items must contain string content")
+            if len(item["content"]) > 12_000:
+                raise ValueError("each history message must be at most 12000 characters")
+        return value
 
 
 class ChatFeedbackRequest(BaseModel):
@@ -115,8 +276,14 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         if not user_res or not user_res.user:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
         return user_res.user
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as error:
+        logging.exception("Authentication validation failed: %s", error)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication token",
+        ) from error
 
 @app.get("/api/dashboard/stats")
 def get_dashboard_stats(current_user = Depends(get_current_user)):
@@ -129,64 +296,87 @@ def get_dashboard_stats(current_user = Depends(get_current_user)):
             m['topic'] = decrypt_text(m.get('topic', ''))
             m['keywords'] = [decrypt_text(k) for k in (m.get('keywords') or [])]
         
+        # Numeric dashboard values are aggregated in PostgreSQL so encrypted scores
+        # do not need to be loaded and averaged in Python on every request.
+        aggregate_rows = []
+        try:
+            aggregate_rows = supabase.rpc(
+                "get_dashboard_aggregates",
+                {"p_user_id": str(current_user.id)},
+            ).execute().data or []
+        except Exception as aggregate_error:
+            # Keep compatibility until the Phase 3 migration has been applied.
+            print(f"⚠️ Dashboard aggregate RPC unavailable, using fallback: {aggregate_error}")
+
         if not memories:
             return {
-                "emotion_trends": [], 
+                "emotion_trends": [],
                 "keyword_distribution": [],
                 "summary_stats": {"total_days": 0, "avg_score": 0, "top_keyword": "無"},
                 "entity_analysis": []
             }
 
-        # 整理情緒趨勢 (按日期平均)
-        date_scores = {}
-        for m in memories:
-            date = m['diary_date']
-            score = m['emotion_score']
-            if score is None: continue
-            if date not in date_scores:
-                date_scores[date] = []
-            date_scores[date].append(score)
-            
-        emotion_trends = []
-        for date in sorted(date_scores.keys()):
-            avg_score = sum(date_scores[date]) / len(date_scores[date])
-            # 找出當天最常出現的 topic
-            topics_today = [m['topic'] for m in memories if m['diary_date'] == date]
-            main_topic = max(set(topics_today), key=topics_today.count) if topics_today else ""
-            
-            emotion_trends.append({
-                "date": date,
-                "score": round(avg_score, 1),
-                "main_topic": main_topic
-            })
-            
-        # 整理關鍵字分佈
+        # PostgreSQL provides date averages/counts; encrypted topics are only used
+        # to retain the existing display label for each day.
+        if aggregate_rows:
+            emotion_trends = []
+            for row in aggregate_rows:
+                date_value = str(row.get("diary_date"))
+                topics_today = [m["topic"] for m in memories if m.get("diary_date") == date_value]
+                main_topic = max(set(topics_today), key=topics_today.count) if topics_today else ""
+                emotion_trends.append({
+                    "date": date_value,
+                    "score": round(float(row.get("avg_score") or 0), 1),
+                    "main_topic": main_topic,
+                })
+            total_days = int(aggregate_rows[0].get("total_days") or 0)
+            avg_overall_score = float(aggregate_rows[0].get("overall_avg_score") or 0)
+        else:
+            # Fallback for a deployment that has not applied the migration yet.
+            date_scores = {}
+            for m in memories:
+                date = m["diary_date"]
+                score = m["emotion_score"]
+                if score is None:
+                    continue
+                date_scores.setdefault(date, []).append(score)
+            emotion_trends = []
+            for date in sorted(date_scores.keys()):
+                avg_score = sum(date_scores[date]) / len(date_scores[date])
+                topics_today = [m["topic"] for m in memories if m["diary_date"] == date]
+                main_topic = max(set(topics_today), key=topics_today.count) if topics_today else ""
+                emotion_trends.append({
+                    "date": date,
+                    "score": round(avg_score, 1),
+                    "main_topic": main_topic,
+                })
+            total_days = len(date_scores)
+            avg_overall_score = (
+                sum(sum(scores) / len(scores) for scores in date_scores.values()) / total_days
+                if total_days else 0
+            )
+
+        # Keyword/entity analysis still uses decrypted fields because existing
+        # keywords and summaries are encrypted; it is intentionally isolated from
+        # the numeric aggregate path above.
         keyword_counts = {}
-        stop_words = {"聊天", "訊息", "回覆", "朋友" }
-        
+        stop_words = {"聊天", "訊息", "回覆", "朋友"}
         for m in memories:
-            keywords = m.get('keywords') or []
-            for kw in keywords:
-                # 過濾掉太長的句子或是無意義的常見字詞
-                if not kw or len(kw) > 10 or kw in stop_words: continue 
+            for kw in m.get("keywords") or []:
+                if not kw or len(kw) > 10 or kw in stop_words:
+                    continue
                 keyword_counts[kw] = keyword_counts.get(kw, 0) + 1
-            
+
         keyword_distribution = [
-            {"name": k, "value": v} 
+            {"name": k, "value": v}
             for k, v in sorted(keyword_counts.items(), key=lambda item: item[1], reverse=True)
-        ][:10] # 只取前 10 大關鍵字，並直接捨棄「其他」長尾數據
-        
-        # 準備大腦總覽數據
-        total_days = len(date_scores)
-        avg_overall_score = 0
-        if total_days > 0:
-            avg_overall_score = sum([sum(scores)/len(scores) for scores in date_scores.values()]) / total_days
+        ][:10]
+
         top_keyword = keyword_distribution[0]["name"] if keyword_distribution else "無"
-        
         summary_stats = {
             "total_days": total_days,
             "avg_score": round(avg_overall_score, 1),
-            "top_keyword": top_keyword
+            "top_keyword": top_keyword,
         }
 
         # 深度分析所有出現在人物關係圖中的人物
@@ -260,11 +450,8 @@ def get_dashboard_stats(current_user = Depends(get_current_user)):
             "summary_stats": summary_stats,
             "entity_analysis": entity_analysis
         }
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"Error fetching dashboard stats: {e}")
-        return {"error": str(e)}
+    except Exception as error:
+        _raise_internal_error("無法載入儀表板資料", error)
 
 CHAT_SOURCE_LIMIT = 8
 CHAT_SOURCE_CONTEXT_LIMIT = 700
@@ -485,6 +672,11 @@ def _get_response_feedback_context(user_id: str) -> str:
 
 @app.post("/api/chat")
 def chat(request: ChatRequest, current_user = Depends(get_current_user)):
+    if not request.message.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="message cannot be empty",
+        )
     try:
         user_id = str(current_user.id)
 
@@ -634,10 +826,10 @@ def chat(request: ChatRequest, current_user = Depends(get_current_user)):
             },
         }
 
+    except HTTPException:
+        raise
     except Exception as error:
-        import traceback
-        traceback.print_exc()
-        return {"error": str(error)}
+        _raise_internal_error("聊天服務暫時無法使用", error)
 
 
 @app.post("/api/chat/feedback")
@@ -651,12 +843,7 @@ def record_chat_feedback(feedback: ChatFeedbackRequest, current_user = Depends(g
         }).execute()
         return {"success": True}
     except Exception as error:
-        import traceback
-        traceback.print_exc()
-        return {
-            "success": False,
-            "error": "無法記錄回饋；請確認已執行 chat_response_feedback migration。",
-        }
+        _raise_internal_error("無法記錄聊天回饋", error)
 
 @app.get("/api/dashboard/graph")
 def get_dashboard_graph(current_user = Depends(get_current_user)):
@@ -738,41 +925,87 @@ def get_dashboard_graph(current_user = Depends(get_current_user)):
             "nodes": nodes,
             "links": links
         }
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {"error": str(e)}
+    except Exception as error:
+        _raise_internal_error("無法載入記憶關係圖", error)
 
 # --- 記憶時光機 API (Phase 5.4) ---
-from typing import Optional, List
+from typing import Optional
+
 
 class MemoryUpdate(BaseModel):
-    diary_date: Optional[str] = None
-    diary_time: Optional[str] = None
-    timezone: Optional[str] = None
-    topic: Optional[str] = None
-    summary: Optional[str] = None
-    emotion_score: Optional[int] = None
-    keywords: Optional[List[str]] = None
-    original_text: Optional[str] = None
-    content: Optional[str] = None
-    importance_weight: Optional[int] = None
+    diary_date: Optional[str] = Field(default=None, max_length=10)
+    diary_time: Optional[str] = Field(default=None, max_length=8)
+    timezone: Optional[str] = Field(default=None, max_length=64)
+    topic: Optional[str] = Field(default=None, max_length=200)
+    summary: Optional[str] = Field(default=None, max_length=3_000)
+    emotion_score: Optional[int] = Field(default=None, ge=0, le=100)
+    keywords: Optional[list[str]] = Field(default=None, max_length=30)
+    original_text: Optional[str] = Field(default=None, max_length=20_000)
+    content: Optional[str] = Field(default=None, max_length=20_000)
+    importance_weight: Optional[int] = Field(default=None, ge=1, le=5)
+
+    @field_validator("diary_date")
+    @classmethod
+    def validate_diary_date(cls, value: str | None) -> str | None:
+        return _normalize_date_value(value, "diary_date") if value is not None else None
+
+    @field_validator("diary_time")
+    @classmethod
+    def validate_diary_time(cls, value: str | None) -> str | None:
+        return _validate_time_value(value)
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str | None) -> str | None:
+        return _validate_timezone_value(value)
+
+    @field_validator("keywords")
+    @classmethod
+    def validate_keywords(cls, value: list[str] | None) -> list[str] | None:
+        return _validate_keywords_value(value)
+
 
 class MemoryCreate(BaseModel):
-    diary_date: str
-    diary_time: Optional[str] = None
-    timezone: Optional[str] = None
-    topic: str
-    summary: str
-    emotion_score: int
-    keywords: List[str]
-    original_text: Optional[str] = ""
-    content: Optional[str] = ""
-    importance_weight: Optional[int] = 3
+    diary_date: str = Field(..., max_length=10)
+    diary_time: Optional[str] = Field(default=None, max_length=8)
+    timezone: Optional[str] = Field(default=None, max_length=64)
+    topic: str = Field(..., min_length=1, max_length=200)
+    summary: str = Field(..., min_length=1, max_length=3_000)
+    emotion_score: int = Field(..., ge=0, le=100)
+    keywords: list[str] = Field(default_factory=list, max_length=30)
+    original_text: Optional[str] = Field(default="", max_length=20_000)
+    content: Optional[str] = Field(default="", max_length=20_000)
+    importance_weight: Optional[int] = Field(default=3, ge=1, le=5)
+
+    @field_validator("diary_date")
+    @classmethod
+    def validate_diary_date(cls, value: str) -> str:
+        return _normalize_date_value(value, "diary_date")
+
+    @field_validator("diary_time")
+    @classmethod
+    def validate_diary_time(cls, value: str | None) -> str | None:
+        return _validate_time_value(value)
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str | None) -> str | None:
+        return _validate_timezone_value(value)
+
+    @field_validator("keywords")
+    @classmethod
+    def validate_keywords(cls, value: list[str]) -> list[str]:
+        return _validate_keywords_value(value) or []
+
 
 class ImportSingleRequest(BaseModel):
-    date_str: str
-    content: str
+    date_str: str = Field(..., max_length=10)
+    content: str = Field(..., min_length=1, max_length=100_000)
+
+    @field_validator("date_str")
+    @classmethod
+    def validate_date_str(cls, value: str) -> str:
+        return _normalize_date_value(value, "date_str")
 
 
 def _normalize_import_content(content: str) -> str:
@@ -815,30 +1048,52 @@ def _save_import_snapshot(user_id: str, date_str: str, content: str, user_email:
 
 
 @app.get("/api/memories")
-def get_memories(current_user = Depends(get_current_user)):
+def get_memories(
+    current_user=Depends(get_current_user),
+    limit: int = Query(default=30, ge=1, le=100),
+    cursor: str | None = Query(default=None),
+):
     try:
-        # 明確列出欄位，絕對不要用 select("*")。
-        # embedding 是 3072 維向量，每筆記憶約 39KB，902 筆會產生約 35MB 的 JSON，
-        # 解析成 Python 物件後記憶體用量會遠超 Render 免費層的 512MB 而被 OOM 中止。
-        # 前端時間軸完全不需要向量，排除後 payload 從 35MB 降到約 1MB。
-        response = supabase.table("memories").select(
-            "id, diary_date, diary_time, timezone, topic, summary, "
-            "emotion_score, importance_weight, keywords, content"
-        ).eq("user_id", current_user.id).order("diary_date", desc=True).execute()
-        for m in response.data:
-            m['summary'] = decrypt_text(m.get('summary', ''))
-            m['content'] = decrypt_text(m.get('content', ''))
-            m['topic'] = decrypt_text(m.get('topic', ''))
-            m['keywords'] = [decrypt_text(k) for k in (m.get('keywords') or [])]
-            m['timezone'] = m.get('timezone') or 'Asia/Taipei'
-        return {"memories": response.data}
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {"error": str(e)}
+        decoded_cursor = _decode_memory_cursor(cursor)
+        cursor_params = decoded_cursor or {}
+        response = supabase.rpc(
+            "get_memory_page",
+            {
+                "p_user_id": str(current_user.id),
+                "p_limit": limit + 1,
+                "p_cursor_date": cursor_params.get("date"),
+                "p_cursor_time": cursor_params.get("time"),
+                "p_cursor_id": cursor_params.get("id"),
+            },
+        ).execute()
+        rows = response.data or []
+        has_more = len(rows) > limit
+        page = rows[:limit]
+        for memory in page:
+            memory["summary"] = decrypt_text(memory.get("summary", ""))
+            memory["content"] = decrypt_text(memory.get("content", ""))
+            memory["topic"] = decrypt_text(memory.get("topic", ""))
+            memory["keywords"] = [
+                decrypt_text(keyword) for keyword in (memory.get("keywords") or [])
+            ]
+            memory["timezone"] = memory.get("timezone") or "Asia/Taipei"
+        next_cursor = _encode_memory_cursor(page[-1]) if has_more and page else None
+        return {
+            "memories": page,
+            "next_cursor": next_cursor,
+            "has_more": has_more,
+        }
+    except HTTPException:
+        raise
+    except Exception as error:
+        _raise_internal_error("無法載入記憶資料", error)
 
 @app.post("/api/memories")
-def create_memory(memory: MemoryCreate, current_user = Depends(get_current_user)):
+def create_memory(
+    memory: MemoryCreate,
+    background_tasks: BackgroundTasks,
+    current_user=Depends(get_current_user),
+):
     try:
         data = memory.model_dump()
         
@@ -863,17 +1118,42 @@ def create_memory(memory: MemoryCreate, current_user = Depends(get_current_user)
         data['keywords'] = [encrypt_text(k, current_user.email) for k in data.get('keywords', [])]
         
         response = supabase.table("memories").insert(data).execute()
-        return {"success": True, "data": response.data}
-    except Exception as e:
-        return {"error": str(e)}
+        graph_sync_queued = False
+        if response.data and response.data[0].get("id"):
+            graph_sync_queued = _queue_graph_sync(
+                str(current_user.id),
+                str(response.data[0]["id"]),
+                "upsert",
+                {
+                    "date_str": data.get("diary_date", ""),
+                    "keywords": memory.keywords,
+                    "emotion_score": data.get("emotion_score", 50),
+                    "importance_weight": data.get("importance_weight", 3),
+                },
+                background_tasks,
+            )
+        return {"success": True, "data": response.data, "graph_sync_queued": graph_sync_queued}
+    except Exception as error:
+        _raise_internal_error("無法建立記憶", error)
 
 @app.put("/api/memories/{memory_id}")
-def update_memory(memory_id: str, memory: MemoryUpdate, current_user = Depends(get_current_user)):
+def update_memory(
+    memory_id: str,
+    memory: MemoryUpdate,
+    background_tasks: BackgroundTasks,
+    current_user=Depends(get_current_user),
+):
     try:
         # 首先驗證這筆記憶是否屬於該使用者
-        old_data_res = supabase.table("memories").select("user_id, diary_date, topic, summary, keywords, content").eq("id", memory_id).execute()
+        old_data_res = supabase.table("memories").select(
+            "user_id, diary_date, topic, summary, keywords, content, "
+            "emotion_score, importance_weight"
+        ).eq("id", memory_id).execute()
         if not old_data_res.data or old_data_res.data[0].get('user_id') != current_user.id:
-            return {"error": "Unauthorized or memory not found"}
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Memory not found",
+            )
             
         old_data = old_data_res.data[0]
         # 解密 old_data
@@ -901,7 +1181,14 @@ def update_memory(memory_id: str, memory: MemoryUpdate, current_user = Depends(g
             
             embedding_text = f"[{date}] 標籤:{topic} - {summary}。相關細節：{', '.join(keywords)}。原文：{content}"
             update_data['embedding'] = get_embedding(embedding_text)
-            
+
+        graph_payload = {
+            "date_str": update_data.get("diary_date", old_data.get("diary_date", "")),
+            "keywords": update_data.get("keywords", old_data.get("keywords", [])),
+            "emotion_score": update_data.get("emotion_score", old_data.get("emotion_score", 50)),
+            "importance_weight": update_data.get("importance_weight", old_data.get("importance_weight", 3)),
+        }
+
         # 在寫入資料庫前，將要更新的字串加密
         if 'summary' in update_data:
             update_data['summary'] = encrypt_text(update_data['summary'], current_user.email)
@@ -913,9 +1200,18 @@ def update_memory(memory_id: str, memory: MemoryUpdate, current_user = Depends(g
             update_data['keywords'] = [encrypt_text(k, current_user.email) for k in update_data['keywords']]
         
         response = supabase.table("memories").update(update_data).eq("id", memory_id).eq("user_id", current_user.id).execute()
-        return {"success": True, "data": response.data}
-    except Exception as e:
-        return {"error": str(e)}
+        graph_sync_queued = _queue_graph_sync(
+            str(current_user.id),
+            memory_id,
+            "upsert",
+            graph_payload,
+            background_tasks,
+        )
+        return {"success": True, "data": response.data, "graph_sync_queued": graph_sync_queued}
+    except HTTPException:
+        raise
+    except Exception as error:
+        _raise_internal_error("無法更新記憶", error)
 
 @app.post("/api/chat/summarize")
 def summarize_chat(request: ChatRequest, current_user = Depends(get_current_user)):
@@ -976,7 +1272,7 @@ def summarize_chat(request: ChatRequest, current_user = Depends(get_current_user
         for attempt in range(max_retries):
             try:
                 # response = client.models.generate_content(
-                #     model='gemini-2.5-flash-lite',
+                #     model='gemini-3.5-flash',
                 #     contents=prompt,
                 #     config=types.GenerateContentConfig(
                 #         response_mime_type="application/json",
@@ -1019,14 +1315,19 @@ def summarize_chat(request: ChatRequest, current_user = Depends(get_current_user
         if context_update:
             update_user_context(current_user.id, context_update)
         return {"success": True, "events": real_events}
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {"error": str(e)}
+    except HTTPException:
+        raise
+    except Exception as error:
+        _raise_internal_error("無法摘要聊天內容", error)
 
 @app.get("/api/memories/monthly_summary")
 def monthly_summary(year: int, month: int, force_regenerate: bool = False, current_user = Depends(get_current_user)):
     """For the Dashboard: generate a narrative story summary for a given month."""
+    if year < 2000 or year > 2100 or month < 1 or month > 12:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="year/month is out of range",
+        )
     import os, json
     CACHE_FILE = "monthly_summaries_cache.json"
     
@@ -1100,18 +1401,34 @@ def monthly_summary(year: int, month: int, force_regenerate: bool = False, curre
             json.dump(user_cache, f, ensure_ascii=False, indent=2)
             
         return {"success": True, "summary": summary_text, "memory_count": len(res.data), "cached": False}
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {"success": False, "error": str(e)}
+    except Exception as error:
+        _raise_internal_error("無法產生月度摘要", error)
 
 @app.delete("/api/memories/{memory_id}")
-def delete_memory(memory_id: str, current_user = Depends(get_current_user)):
+def delete_memory(
+    memory_id: str,
+    background_tasks: BackgroundTasks,
+    current_user=Depends(get_current_user),
+):
     try:
         response = supabase.table("memories").delete().eq("id", memory_id).eq("user_id", current_user.id).execute()
-        return {"success": True}
-    except Exception as e:
-        return {"error": str(e)}
+        if not response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Memory not found",
+            )
+        graph_sync_queued = _queue_graph_sync(
+            str(current_user.id),
+            memory_id,
+            "delete",
+            None,
+            background_tasks,
+        )
+        return {"success": True, "graph_sync_queued": graph_sync_queued}
+    except HTTPException:
+        raise
+    except Exception as error:
+        _raise_internal_error("無法刪除記憶", error)
 
 
 # --- 全局脈絡 (Global Rolling Context) Helpers ---
@@ -1141,7 +1458,10 @@ def import_single_day(request: ImportSingleRequest, background_tasks: Background
     try:
         normalized_content = _normalize_import_content(request.content)
         if not normalized_content:
-            return {"success": False, "error": "日記內容不能是空白。"}
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="日記內容不能是空白",
+            )
 
         # 以內容快照判斷重複，而不是只看日期。
         # 同一天若是舊內容加上新段落，只分析新增的尾端。
@@ -1214,7 +1534,7 @@ def import_single_day(request: ImportSingleRequest, background_tasks: Background
         for attempt in range(max_retries):
             try:
                 # response = client.models.generate_content(
-                # model='gemini-2.5-flash-lite',
+                # model='gemini-3.5-flash',
                 #     contents=prompt,
                 #     config=types.GenerateContentConfig(response_mime_type="application/json")
                 # )
@@ -1246,7 +1566,10 @@ def import_single_day(request: ImportSingleRequest, background_tasks: Background
                     raise e
                     
         if not events:
-            return {"success": False, "error": "Failed to parse events"}
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="AI 未產生可用的事件資料",
+            )
 
         # 4. 抽取 context_update 並分開正式事件
         context_update = None
@@ -1301,18 +1624,24 @@ def import_single_day(request: ImportSingleRequest, background_tasks: Background
             if event_quote:
                 existing_event_contents.add(event_quote)
             
-            # 將事件同步至圖資料庫（放在背景執行，不卡住前端體驗）
-            # 注意：只同步結構化資訊（人物關聯、日期、分數），不寫入 topic/summary 內容明文
-            if _neo4j_available and res.data:
+            # Supabase 是 source of truth；Neo4j 同步先寫入 durable outbox。
+            # 只同步結構化資訊，不寫入 topic/summary 等內容明文。
+            if res.data:
                 memory_id = res.data[0].get("id")
-                background_tasks.add_task(
-                    sync_event_to_graph,
+                _queue_graph_sync(
                     str(current_user.id),
                     str(memory_id),
-                    request.date_str,
-                    [k for k in event.get("keywords", []) if k not in ["蕭筠蓁", "我", "自己"]],
-                    event.get("emotion_score", 50),
-                    event.get("importance_weight", 3)
+                    "upsert",
+                    {
+                        "date_str": request.date_str,
+                        "keywords": [
+                            k for k in event.get("keywords", [])
+                            if k not in ["蕭筠蓁", "我", "自己"]
+                        ],
+                        "emotion_score": event.get("emotion_score", 50),
+                        "importance_weight": event.get("importance_weight", 3),
+                    },
+                    background_tasks,
                 )
 
         # 所有事件完成後才保存完整來源；下次同日追加時可只分析新增尾端。
@@ -1347,10 +1676,10 @@ def import_single_day(request: ImportSingleRequest, background_tasks: Background
             "skipped_event_count": skipped_event_count,
             "appended": analysis_content != normalized_content,
         }
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {"success": False, "error": str(e)}
+    except HTTPException:
+        raise
+    except Exception as error:
+        _raise_internal_error("無法匯入日記", error)
 
 
 # ── 圖資料庫 API (Neo4j) ─────────────────────────────────────────────────
@@ -1359,12 +1688,15 @@ def import_single_day(request: ImportSingleRequest, background_tasks: Background
 def get_graph_data(current_user = Depends(get_current_user)):
     """Takes the full graph data from Neo4j for visualization."""
     if not _neo4j_available:
-        return {"error": "Neo4j 圖資料庫目前不可用"}
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neo4j 圖資料庫目前不可用",
+        )
     try:
         data = get_full_graph(str(current_user.id))
         return {"success": True, **data}
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception as error:
+        _raise_internal_error("無法載入記憶關係圖", error)
 
 @app.get("/api/dashboard/relationship_heatmap")
 def get_relationship_heatmap(current_user = Depends(get_current_user)):
@@ -1439,10 +1771,8 @@ def get_relationship_heatmap(current_user = Depends(get_current_user)):
         persons.sort(key=lambda p: p["total_count"], reverse=True)
 
         return {"success": True, "months": all_months, "persons": persons}
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {"success": False, "error": str(e)}
+    except Exception as error:
+        _raise_internal_error("無法載入關係熱力圖", error)
 
 @app.get("/api/dashboard/person_overview")
 def get_person_overview(current_user = Depends(get_current_user)):
@@ -1519,10 +1849,8 @@ def get_person_overview(current_user = Depends(get_current_user)):
         persons.sort(key=lambda p: p["total_count"], reverse=True)
 
         return {"success": True, "persons": persons}
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {"success": False, "error": str(e)}
+    except Exception as error:
+        _raise_internal_error("無法載入人物總覽", error)
 
 @app.get("/api/graph/persons")
 def get_persons_graph(current_user = Depends(get_current_user)):
@@ -1531,7 +1859,10 @@ def get_persons_graph(current_user = Depends(get_current_user)):
     並附上每個人物的平均情緒分數、互動次數與人物檔案，供前端做顏色/大小編碼。
     """
     if not _neo4j_available:
-        return {"error": "Neo4j 圖資料庫目前不可用"}
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neo4j 圖資料庫目前不可用",
+        )
     try:
         entities_res = supabase.table("entities").select("name, description, relationship") \
             .eq("user_id", current_user.id).execute()
@@ -1559,10 +1890,8 @@ def get_persons_graph(current_user = Depends(get_current_user)):
             node["relationship"] = profile.get("relationship", "")
 
         return {"success": True, **graph}
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {"error": str(e)}
+    except Exception as error:
+        _raise_internal_error("無法載入人物關係圖", error)
 
 def _get_person_analytics_bundle(user_id: str, person_name: str) -> dict:
     """
@@ -1654,14 +1983,15 @@ def get_person_graph(person_name: str, current_user = Depends(get_current_user))
       - status: 現況簡報卡（最新事件、趨勢方向、人物側寫最後更新時間）
     """
     if not _neo4j_available:
-        return {"error": "Neo4j 圖資料庫目前不可用"}
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neo4j 圖資料庫目前不可用",
+        )
     try:
         bundle = _get_person_analytics_bundle(str(current_user.id), person_name)
         return {"success": True, **bundle}
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {"error": str(e)}
+    except Exception as error:
+        _raise_internal_error("無法載入人物分析", error)
 
 
 @app.get("/api/graph/compare")
@@ -1673,9 +2003,15 @@ def compare_persons(person_a: str, person_b: str, current_user = Depends(get_cur
     直接重用 _get_person_analytics_bundle()，與單一人物詳情面板保證資料格式一致。
     """
     if not _neo4j_available:
-        return {"error": "Neo4j 圖資料庫目前不可用"}
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neo4j 圖資料庫目前不可用",
+        )
     if not person_a or not person_b:
-        return {"success": False, "error": "請提供兩位人物的名稱（person_a、person_b）。"}
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="請提供兩位人物的名稱（person_a、person_b）。",
+        )
     try:
         user_id = str(current_user.id)
         bundle_a = _get_person_analytics_bundle(user_id, person_a)
@@ -1687,10 +2023,8 @@ def compare_persons(person_a: str, person_b: str, current_user = Depends(get_cur
                 {"name": person_b, **bundle_b},
             ],
         }
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {"error": str(e)}
+    except Exception as error:
+        _raise_internal_error("無法比較人物資料", error)
 
 # --- 背景腳本併發保護 ---
 # 避免同一個使用者對同一種背景任務（圖譜同步 / 實體編譯）連續觸發多個行程同時執行，
@@ -1764,10 +2098,15 @@ def trigger_build_graph(current_user = Depends(get_current_user)):
             cwd=os.path.dirname(os.path.abspath(__file__))
         )
         if not started:
-            return {"success": False, "message": "Neo4j 圖資料庫同步已在進行中，請等待完成後再試一次。"}
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Neo4j 圖資料庫同步已在進行中，請等待完成後再試一次。",
+            )
         return {"success": True, "message": "已觸發 Neo4j 圖資料庫同步！系統正在背景建立圖譜中，這可能需要幾分鐘。"}
-    except Exception as e:
-        return {"error": str(e)}
+    except HTTPException:
+        raise
+    except Exception as error:
+        _raise_internal_error("無法啟動 Neo4j 同步", error)
 
 
 @app.post("/api/entities/build")
@@ -1781,10 +2120,15 @@ def trigger_build_entities(current_user = Depends(get_current_user)):
             [sys.executable, "scripts/build_entities.py", str(current_user.id)]
         )
         if not started:
-            return {"success": False, "message": "核心人物檔案編譯已在進行中，請等待完成後再試一次。"}
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="核心人物檔案編譯已在進行中，請等待完成後再試一次。",
+            )
         return {"success": True, "message": "已成功觸發核心人物檔案編譯！系統正在背景努力更新大腦中。"}
-    except Exception as e:
-        return {"error": str(e)}
+    except HTTPException:
+        raise
+    except Exception as error:
+        _raise_internal_error("無法啟動人物檔案編譯", error)
 
 if __name__ == "__main__":
     import uvicorn

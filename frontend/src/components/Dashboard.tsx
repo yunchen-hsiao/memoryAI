@@ -6,6 +6,7 @@ import MemoryGraph from './MemoryGraph';
 import RelationshipHeatmap from './RelationshipHeatmap';
 import PersonCompare from './PersonCompare';
 import { DashboardIcon } from './Icons';
+import { apiFetch } from '../lib/api';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -13,19 +14,34 @@ interface DashboardProps {
   token: string | null;
 }
 
+interface MonthlySummaryResponse {
+  summary?: string | null;
+  message?: string;
+  memory_count?: number;
+}
+
+interface BuildEntitiesResponse {
+  message?: string;
+}
+
+interface DashboardStats {
+  emotion_trends: { date: string; score: number; main_topic: string }[];
+  keyword_distribution: { name: string; value: number }[];
+  summary_stats?: { total_days: number; avg_score: number; top_keyword: string };
+  entity_analysis?: {
+    name: string;
+    mentions: number;
+    avg_score: number;
+    co_keywords: string[];
+    latest_events: { date: string; summary: string }[];
+  }[];
+}
+
 export default function Dashboard({ token }: DashboardProps) {
-  const [stats, setStats] = useState<{
-    emotion_trends: any[], 
-    keyword_distribution: any[],
-    summary_stats?: { total_days: number, avg_score: number, top_keyword: string },
-    entity_analysis?: {
-      name: string;
-      mentions: number;
-      avg_score: number;
-      co_keywords: string[];
-      latest_events: {date: string, summary: string}[];
-    }[]
-  }>({ emotion_trends: [], keyword_distribution: [] });
+  const [stats, setStats] = useState<DashboardStats>({
+    emotion_trends: [],
+    keyword_distribution: [],
+  });
   const [loading, setLoading] = useState(true);
   const [selectedEntityIdx, setSelectedEntityIdx] = useState(0);
 
@@ -41,17 +57,16 @@ export default function Dashboard({ token }: DashboardProps) {
     setSummaryLoading(true);
     setMonthlySummary(null);
     try {
-      const res = await fetch(`${API_BASE}/api/memories/monthly_summary?year=${year}&month=${month}&force_regenerate=${forceRegenerate}`, {
+      const data = await apiFetch<MonthlySummaryResponse>(`${API_BASE}/api/memories/monthly_summary?year=${year}&month=${month}&force_regenerate=${forceRegenerate}`, {
         headers: token ? { 'Authorization': `Bearer ${token}` } : {}
       });
-      const data = await res.json();
-      if (data.success && data.summary) {
+      if (data.summary) {
         setMonthlySummary(data.summary);
         setSummaryMemoryCount(data.memory_count || 0);
       } else {
         setMonthlySummary(data.message || '這個月份還沒有記憶。');
       }
-    } catch (err) {
+    } catch {
       setMonthlySummary('載入失敗，請重試。');
     } finally {
       setSummaryLoading(false);
@@ -60,26 +75,20 @@ export default function Dashboard({ token }: DashboardProps) {
 
   const handleBuildEntities = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/entities/build`, { 
+      const data = await apiFetch<BuildEntitiesResponse>(`${API_BASE}/api/entities/build`, {
         method: 'POST',
         headers: token ? { 'Authorization': `Bearer ${token}` } : {}
       });
-      const data = await res.json();
-      if (data.success) {
-        alert('⚡ ' + data.message);
-      } else {
-        alert('❌ 編譯失敗：' + data.error);
-      }
+      alert('⚡ ' + (data.message || '已啟動人物檔案編譯。'));
     } catch (err) {
-      alert('❌ 網路錯誤：' + err);
+      alert('❌ 編譯失敗：' + String(err));
     }
   };
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/dashboard/stats`, {
+    apiFetch<DashboardStats>(`${API_BASE}/api/dashboard/stats`, {
       headers: token ? { 'Authorization': `Bearer ${token}` } : {}
     })
-      .then(res => res.json())
       .then(data => {
         setStats(data);
         setLoading(false);
@@ -88,7 +97,7 @@ export default function Dashboard({ token }: DashboardProps) {
         console.error(err);
         setLoading(false);
       });
-  }, []);
+  }, [token]);
 
   // 頁面載入時自動抓取當月摘要（不強制重新生成，優先讀快取）
   useEffect(() => {

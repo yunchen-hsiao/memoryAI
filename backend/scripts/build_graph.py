@@ -29,7 +29,7 @@ def main():
     # 初始化 Supabase
     supabase = create_client(
         os.environ.get("SUPABASE_URL"),
-        os.environ.get("SUPABASE_KEY")
+        os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
     )
 
     print(f"[START] Syncing memories for user {user_id} to Neo4j...")

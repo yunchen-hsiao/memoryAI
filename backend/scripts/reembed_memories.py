@@ -38,9 +38,9 @@ from security import decrypt_text
 load_dotenv()
 
 supabase_url = os.environ.get("SUPABASE_URL")
-supabase_key = os.environ.get("SUPABASE_KEY")
+supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
 if not supabase_url or not supabase_key:
-    print("❌ 找不到 SUPABASE_URL 或 SUPABASE_KEY，請確認 .env 檔案是否設定正確。")
+    print("❌ 找不到 SUPABASE_URL 或 SUPABASE_SERVICE_ROLE_KEY，請確認 .env 檔案是否設定正確。")
     sys.exit(1)
 supabase: Client = create_client(supabase_url, supabase_key)
 

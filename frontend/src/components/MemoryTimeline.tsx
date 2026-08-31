@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Search, Edit2, Trash2, Calendar, Hash, Plus, FileText } from 'lucide-react';
 import { TimelineIcon } from './Icons';
+import { apiFetch } from '../lib/api';
 
 interface Memory {
   id: string;
@@ -14,6 +15,12 @@ interface Memory {
   content?: string;
 }
 
+interface MemoryPageResponse {
+  memories?: Memory[];
+  next_cursor?: string | null;
+  has_more?: boolean;
+}
+
 interface MemoryTimelineProps {
   token: string | null;
 }
@@ -23,51 +30,63 @@ const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 export default function MemoryTimeline({ token }: MemoryTimelineProps) {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   
   // Modal state
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingMemory, setEditingMemory] = useState<Partial<Memory>>({});
 
-  const fetchMemories = async () => {
+  const fetchMemories = async (cursor: string | null = null, append = false) => {
     try {
-      setLoading(true);
-      const res = await fetch(`${API_BASE}/api/memories`, {
+      if (append) {
+        setLoadingMore(true);
+      } else {
+        setLoading(true);
+      }
+      const query = cursor ? `?limit=30&cursor=${encodeURIComponent(cursor)}` : '?limit=30';
+      const data = await apiFetch<MemoryPageResponse>(`${API_BASE}/api/memories${query}`, {
         headers: token ? { 'Authorization': `Bearer ${token}` } : {}
       });
-      const data = await res.json();
-      if (data.memories) {
-        const sorted = data.memories.sort((a: Memory, b: Memory) => {
-          const dateA = a.diary_date || '';
-          const dateB = b.diary_date || '';
-          if (dateA !== dateB) return dateB.localeCompare(dateA);
-          const timeA = a.diary_time || '';
-          const timeB = b.diary_time || '';
-          return timeB.localeCompare(timeA);
-        });
-        setMemories(sorted);
-      }
+      const sorted = [...(data.memories || [])].sort((a: Memory, b: Memory) => {
+        const dateA = a.diary_date || '';
+        const dateB = b.diary_date || '';
+        if (dateA !== dateB) return dateB.localeCompare(dateA);
+        const timeA = a.diary_time || '';
+        const timeB = b.diary_time || '';
+        return timeB.localeCompare(timeA);
+      });
+      setMemories(previous => append ? [...previous, ...sorted] : sorted);
+      setNextCursor(data.next_cursor || null);
+      setHasMore(Boolean(data.has_more));
     } catch (err) {
       console.error(err);
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   };
 
   useEffect(() => {
     fetchMemories();
-  }, []);
+  }, [token]);
+
+  const handleLoadMore = () => {
+    if (!loadingMore && hasMore && nextCursor) {
+      fetchMemories(nextCursor, true);
+    }
+  };
 
   const handleDelete = async (id: string) => {
     if (!window.confirm('確定要刪除這筆記憶嗎？')) return;
     try {
-      const res = await fetch(`${API_BASE}/api/memories/${id}`, { 
+      await apiFetch<{ success: true }>(`${API_BASE}/api/memories/${id}`, {
         method: 'DELETE',
         headers: token ? { 'Authorization': `Bearer ${token}` } : {}
       });
-      if (res.ok) {
-        setMemories(memories.filter(m => m.id !== id));
-      }
+      setMemories(previous => previous.filter(m => m.id !== id));
     } catch (err) {
       console.error(err);
     }
@@ -85,22 +104,17 @@ export default function MemoryTimeline({ token }: MemoryTimelineProps) {
         delete payload.id; // 新增時不需要 id
       }
       
-      const res = await fetch(url, {
+      await apiFetch<{ success: true }>(url, {
         method: isUpdate ? 'PUT' : 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           ...(token ? { 'Authorization': `Bearer ${token}` } : {})
         },
         body: JSON.stringify(payload)
       });
-      
-      if (res.ok) {
-        fetchMemories();
-        setIsEditModalOpen(false);
-      } else {
-        const errData = await res.json();
-        alert('儲存失敗：' + (errData.error || '未知錯誤'));
-      }
+
+      await fetchMemories();
+      setIsEditModalOpen(false);
     } catch (err) {
       console.error(err);
       alert('儲存失敗：' + String(err));
@@ -264,6 +278,18 @@ export default function MemoryTimeline({ token }: MemoryTimelineProps) {
           ))
         )}
       </div>
+
+      {hasMore && nextCursor && (
+        <button
+          type="button"
+          onClick={handleLoadMore}
+          disabled={loadingMore}
+          className="mt-4 self-center px-5 py-2.5 rounded-xl font-medium transition-colors disabled:opacity-50"
+          style={{ backgroundColor: 'var(--color-m-panel-alt)', color: 'var(--color-m-accent1)', border: '1px solid var(--color-m-border)' }}
+        >
+          {loadingMore ? '正在載入更多…' : '載入更多記憶'}
+        </button>
+      )}
 
       {/* Edit/Create Modal */}
       {isEditModalOpen && (

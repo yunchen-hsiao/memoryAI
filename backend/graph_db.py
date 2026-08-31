@@ -66,7 +66,7 @@ def sync_event_to_graph(user_id: str, memory_id: str, date_str: str, keywords: l
     try:
         with driver.session() as session:
             session.execute_write(
-                _create_memory_graph,
+                _upsert_memory_graph,
                 user_id, memory_id, date_str, keywords, emotion_score, importance_weight
             )
     except (ServiceUnavailable, SessionExpired) as e:
@@ -310,3 +310,166 @@ def get_person_relationship_graph(user_id: str, person_names: list[str],
             raise
         _reset_driver()
         return get_person_relationship_graph(user_id, person_names, _retry=False)
+
+
+def upsert_event_to_graph(user_id: str, memory_id: str, date_str: str, keywords: list[str],
+                          emotion_score: int, importance_weight: int = 3,
+                          _retry: bool = True) -> None:
+    """Idempotently create or update an Event and its structural relationships."""
+    driver = get_driver()
+    try:
+        with driver.session() as session:
+            session.execute_write(
+                _upsert_memory_graph,
+                user_id, memory_id, date_str, keywords, emotion_score, importance_weight
+            )
+    except (ServiceUnavailable, SessionExpired):
+        if not _retry:
+            raise
+        _reset_driver()
+        upsert_event_to_graph(
+            user_id, memory_id, date_str, keywords, emotion_score,
+            importance_weight, _retry=False
+        )
+
+
+def _upsert_memory_graph(tx, user_id: str, memory_id: str, date_str: str,
+                         keywords: list[str], emotion_score: int,
+                         importance_weight: int) -> None:
+    # Event properties and ownership are safe to MERGE because Event.id is unique.
+    tx.run(
+        "MERGE (u:User {id: $user_id})",
+        user_id=user_id,
+    )
+    tx.run(
+        "MERGE (d:Date {date: $date_str})",
+        date_str=date_str,
+    )
+    tx.run(
+        """
+        MERGE (e:Event {id: $memory_id})
+        SET e.user_id = $user_id,
+            e.date = $date_str,
+            e.emotion_score = $emotion_score,
+            e.importance_weight = $importance_weight
+        """,
+        memory_id=memory_id,
+        user_id=user_id,
+        date_str=date_str,
+        emotion_score=emotion_score,
+        importance_weight=importance_weight,
+    )
+    tx.run(
+        """
+        MATCH (u:User {id: $user_id}), (e:Event {id: $memory_id})
+        MERGE (u)-[:EXPERIENCED]->(e)
+        """,
+        user_id=user_id,
+        memory_id=memory_id,
+    )
+    # Remove stale date and keyword relationships before adding the new snapshot.
+    tx.run(
+        """
+        MATCH (e:Event {id: $memory_id})-[r:OCCURRED_ON]->(d:Date)
+        DELETE r
+        """,
+        memory_id=memory_id,
+    )
+    tx.run(
+        """
+        MATCH (e:Event {id: $memory_id})-[r:MENTIONS]->(k:Keyword)
+        DELETE r
+        """,
+        memory_id=memory_id,
+    )
+    tx.run(
+        """
+        MATCH (e:Event {id: $memory_id}), (d:Date {date: $date_str})
+        MERGE (e)-[:OCCURRED_ON]->(d)
+        """,
+        memory_id=memory_id,
+        date_str=date_str,
+    )
+    for keyword in {str(item).strip() for item in keywords}:
+        if not keyword or len(keyword) < 2 or len(keyword) > 6:
+            continue
+        tx.run(
+            """
+            MERGE (k:Keyword {name: $keyword, user_id: $user_id})
+            """,
+            keyword=keyword,
+            user_id=user_id,
+        )
+        tx.run(
+            """
+            MATCH (e:Event {id: $memory_id}), (k:Keyword {name: $keyword, user_id: $user_id})
+            MERGE (e)-[:MENTIONS]->(k)
+            """,
+            memory_id=memory_id,
+            keyword=keyword,
+            user_id=user_id,
+        )
+    # Recompute counts after replacing relationships, then remove stale nodes.
+    tx.run(
+        """
+        MATCH (k:Keyword {user_id: $user_id})
+        OPTIONAL MATCH (e:Event)-[r:MENTIONS]->(k)
+        WITH k, count(r) AS mention_count
+        SET k.mention_count = mention_count
+        """,
+        user_id=user_id,
+    )
+    tx.run(
+        """
+        MATCH (k:Keyword {user_id: $user_id})
+        WHERE NOT (k)<-[:MENTIONS]-()
+        DETACH DELETE k
+        """,
+        user_id=user_id,
+    )
+    tx.run(
+        """
+        MATCH (d:Date)
+        WHERE NOT (d)<-[:OCCURRED_ON]-()
+        DETACH DELETE d
+        """
+    )
+
+
+def delete_event_from_graph(user_id: str, memory_id: str, _retry: bool = True) -> None:
+    """Delete an Event and clean orphaned structural nodes/relationships."""
+    driver = get_driver()
+    try:
+        with driver.session() as session:
+            session.execute_write(_delete_memory_graph, user_id, memory_id)
+    except (ServiceUnavailable, SessionExpired):
+        if not _retry:
+            raise
+        _reset_driver()
+        delete_event_from_graph(user_id, memory_id, _retry=False)
+
+
+def _delete_memory_graph(tx, user_id: str, memory_id: str) -> None:
+    tx.run(
+        """
+        MATCH (u:User {id: $user_id})-[:EXPERIENCED]->(e:Event {id: $memory_id})
+        DETACH DELETE e
+        """,
+        user_id=user_id,
+        memory_id=memory_id,
+    )
+    tx.run(
+        """
+        MATCH (k:Keyword {user_id: $user_id})
+        WHERE NOT (k)<-[:MENTIONS]-()
+        DETACH DELETE k
+        """,
+        user_id=user_id,
+    )
+    tx.run(
+        """
+        MATCH (d:Date)
+        WHERE NOT (d)<-[:OCCURRED_ON]-()
+        DETACH DELETE d
+        """
+    )

@@ -12,12 +12,13 @@ from supabase import create_client, Client
 # 載入環境變數
 load_dotenv()
 
-ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "").strip().lower()
-ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY", "")
-
-# 設定 Supabase
+# 設定 Supabase；SUPABASE_KEY 僅保留給既有本機環境相容使用。
 supabase_url = os.environ.get("SUPABASE_URL")
-supabase_key = os.environ.get("SUPABASE_KEY")
+supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
+if not supabase_url or not supabase_key:
+    raise RuntimeError(
+        "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required"
+    )
 supabase: Client = create_client(supabase_url, supabase_key)
 
 # 初始化 Google Gemini 客戶端 (專供 Embedding 使用)
@@ -62,26 +63,10 @@ else:
         print(f"⚠️ Neo4j 模組載入失敗，將跳過圖資料庫同步：{_e}")
         _neo4j_available = False
 
-# ── 加密模組 (與 security.py 相同邏輯) ──────────────────────────────────────
-from cryptography.fernet import Fernet
-_fernet = Fernet(ENCRYPTION_KEY.encode()) if ENCRYPTION_KEY else None
-
-def encrypt_text(text: str, user_email: str) -> str:
-    if not _fernet or not text:
-        return text
-    if ADMIN_EMAIL and user_email.strip().lower() == ADMIN_EMAIL:
-        return text  # 管理員豁免
-    return _fernet.encrypt(text.encode()).decode()
-
-
-def decrypt_text(text: str) -> str:
-    if not _fernet or not text:
-        return text
-    try:
-        return _fernet.decrypt(text.encode()).decode()
-    except Exception:
-        # 管理員資料或舊資料可能本來就是明文。
-        return text
+# 使用與 API 相同的 fail-closed 加密實作，避免批次匯入繞過安全規則。
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from security import encrypt_text, decrypt_text
 
 
 def normalize_import_content(content: str) -> str:
@@ -282,11 +267,11 @@ def main():
         user_email = user_res.user.email if user_res and user_res.user else ""
     except Exception as e:
         print(f"⚠️ 無法透過 API 取得使用者 Email: {e}")
-        # 如果失敗，嘗試從 .env 讀取 ADMIN_EMAIL 作為 fallback
-        user_email = os.environ.get("ADMIN_EMAIL", "")
+        # 加密函式不再依賴管理員 email；這裡只保留空字串作為舊流程的相容參數。
+        user_email = ""
 
     if not user_email:
-        print("❌ 錯誤：無法取得 Email 進行加密，請在 .env 中設定 ADMIN_EMAIL，或是檢查 Supabase Service Role Key。")
+        print("❌ 錯誤：無法取得使用者資料，請確認 Supabase Service Role Key 與 user_id 正確。")
         exit(1)
         
     print(f"✅ 使用者 Email (用於加密): {user_email}")

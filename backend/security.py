@@ -5,59 +5,43 @@ from dotenv import load_dotenv
 load_dotenv()
 
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL")
+if not ENCRYPTION_KEY:
+    raise RuntimeError(
+        "ENCRYPTION_KEY is required; refusing to start without application encryption"
+    )
 
-if ENCRYPTION_KEY:
-    try:
-        fernet = Fernet(ENCRYPTION_KEY.encode('utf-8'))
-    except Exception as e:
-        print(f"Warning: Failed to initialize Fernet with provided key: {e}")
-        fernet = None
-else:
-    fernet = None
+try:
+    fernet = Fernet(ENCRYPTION_KEY.encode("utf-8"))
+except Exception as error:
+    raise RuntimeError("ENCRYPTION_KEY is invalid; expected a valid Fernet key") from error
 
-def encrypt_text(text: str, user_email: str) -> str:
-    """
-    Encrypts text unless the user is the admin.
-    Returns the original text if no encryption key is set or text is empty.
-    """
+
+def encrypt_text(text: str, user_email: str = "") -> str:
+    """Encrypt text before persistence; never silently fall back to plaintext."""
     if not text:
         return text
-        
-    # 如果發文者是管理員，直接存明文
-    if ADMIN_EMAIL and user_email == ADMIN_EMAIL:
-        return text
-        
-    if fernet is None:
-        return text
-        
+
     try:
-        # Encrypt and return as string
-        encrypted_bytes = fernet.encrypt(text.encode('utf-8'))
-        return encrypted_bytes.decode('utf-8')
-    except Exception as e:
-        print(f"Encryption error: {e}")
-        return text
+        return fernet.encrypt(text.encode("utf-8")).decode("utf-8")
+    except Exception as error:
+        raise RuntimeError("Failed to encrypt sensitive text") from error
+
 
 def decrypt_text(text: str) -> str:
     """
-    Decrypts text if it is encrypted.
-    If decryption fails (e.g., old plaintext data or admin data), returns the original text.
+    Decrypt text using the configured key.
+
+    InvalidToken is retained as a compatibility path for legacy plaintext rows. New writes
+    never use this path; a later migration should convert or explicitly classify old rows.
+    Other failures are raised instead of being silently returned as plaintext.
     """
     if not text:
         return text
-        
-    if fernet is None:
-        return text
-        
+
     try:
-        # Attempt to decrypt
-        decrypted_bytes = fernet.decrypt(text.encode('utf-8'))
-        return decrypted_bytes.decode('utf-8')
+        return fernet.decrypt(text.encode("utf-8")).decode("utf-8")
     except InvalidToken:
-        # If it throws InvalidToken, it means the text is likely plaintext (not encrypted by this key)
+        # 相容既有尚未加密的舊資料；新資料一律由 encrypt_text() 加密。
         return text
-    except Exception as e:
-        # For any other error, fallback to original text to prevent breaking the app
-        # print(f"Decryption error fallback: {e}")
-        return text
+    except Exception as error:
+        raise RuntimeError("Failed to decrypt sensitive text") from error
